@@ -2,11 +2,12 @@ from io import StringIO
 import csv
 import traceback
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from .config import ASSETS
+from .config import ASSETS, BINANCE_VISION_BASE
 from .db import init_db, upsert_rows, get_history
 from .services import collect
 
@@ -90,15 +91,14 @@ async def debug(asset: str):
     if asset not in ASSETS:
         return JSONResponse({'error': 'Неизвестный актив'}, status_code=404)
     import httpx
-    from datetime import datetime, timezone
-    from .config import ASSETS as A, BINANCE_VISION_BASE
     results = {}
     now = datetime.now(tz=timezone.utc)
     year, month = now.year, now.month
     month_str = f'{month:02d}'
+    start_ms = int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
-    # Binance Vision (no geo-block)
-    symbol_b = A[asset]['binance']
+    # Binance Vision
+    symbol_b = ASSETS[asset]['binance']
     fname = f'{symbol_b}-fundingRate-{year}-{month_str}.zip'
     url_b = f'{BINANCE_VISION_BASE}/{symbol_b}/{fname}'
     try:
@@ -116,24 +116,22 @@ async def debug(asset: str):
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get('https://www.okx.com/api/v5/public/funding-rate-history',
-                            params={'instId': A[asset]['okx'], 'limit': 3})
+                            params={'instId': ASSETS[asset]['okx'], 'limit': 3})
             data = r.json()
             results['okx'] = {'status': r.status_code, 'sample': data.get('data', [])[:2]}
     except Exception as e:
         results['okx'] = {'error': str(e)}
 
     # Hyperliquid
-    from .config import _year_start_ms_helper
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
-            start = int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
             r = await c.post('https://api.hyperliquid.xyz/info',
                              json={'type': 'fundingHistory',
-                                   'coin': A[asset]['hyperliquid'],
-                                   'startTime': start,
-                                   'endTime': start + 86400000 * 7})
+                                   'coin': ASSETS[asset]['hyperliquid'],
+                                   'startTime': start_ms,
+                                   'endTime': start_ms + 86400000 * 7})
             results['hyperliquid'] = {
-                'coin': A[asset]['hyperliquid'],
+                'coin': ASSETS[asset]['hyperliquid'],
                 'status': r.status_code,
                 'sample': r.json()[:2] if r.status_code == 200 else r.text[:300]
             }
