@@ -11,9 +11,15 @@ from .config import ASSETS
 from .db import init_db, upsert_rows, get_history
 from .services import collect
 
+# Периодов в год по каждой бирже
+PERIODS_PER_YEAR = {
+    'hyperliquid': 8760,   # каждый час
+    'okx':         1095,   # каждые 8 часов
+    'binance':     1095,
+}
+
 
 def ms_to_dt(ms: int) -> str:
-    """Unix ms → 'YYYY-MM-DD HH:MM:SS UTC'"""
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
@@ -64,6 +70,59 @@ async def history(asset: str):
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
 
 
+@app.get('/api/stats/{asset}')
+async def stats(asset: str):
+    """
+    Статистика по funding rate:
+    - средняя ставка за период
+    - проекция годовой доходности (аннуализация)
+    - макс/мин ставка
+    - позитивных периодов vs негативных
+    """
+    asset = asset.upper()
+    if asset not in ASSETS:
+        return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
+    try:
+        rows = await get_history(asset)
+        if not rows:
+            return JSONResponse({'ok': True, 'asset': asset, 'message': 'Нет данных. Сначала нажми «Собрать историю».'})
+
+        # Группируем по биржам
+        from collections import defaultdict
+        by_exchange = defaultdict(list)
+        for r in rows:
+            by_exchange[r['exchange']].append(r['funding_rate'])
+
+        result = {'ok': True, 'asset': asset, 'total_rows': len(rows), 'by_exchange': {}}
+
+        for exchange, rates in by_exchange.items():
+            n = len(rates)
+            avg = sum(rates) / n
+            ppy = PERIODS_PER_YEAR.get(exchange, 8760)
+            annual_yield = avg * ppy * 100  # в %
+            positives = sum(1 for r in rates if r > 0)
+            negatives = sum(1 for r in rates if r < 0)
+
+            result['by_exchange'][exchange] = {
+                'periods':            n,
+                'periods_per_year':   ppy,
+                'avg_rate':           round(avg, 10),
+                'avg_rate_pct':       f"{avg * 100:.6f}%",
+                'annualized_yield':   f"{annual_yield:.4f}%",
+                'max_rate_pct':       f"{max(rates) * 100:.6f}%",
+                'min_rate_pct':       f"{min(rates) * 100:.6f}%",
+                'positive_periods':   positives,
+                'negative_periods':   negatives,
+                'pct_positive':       f"{positives / n * 100:.1f}%",
+            }
+
+        return JSONResponse(result)
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(tb)
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
 @app.get('/api/export/{asset}.csv')
 async def export(asset: str):
     asset = asset.upper()
@@ -74,12 +133,9 @@ async def export(asset: str):
         buf = StringIO()
         fieldnames = [
             'exchange', 'asset', 'symbol',
-            'datetime_utc',       # читаемая дата
-            'funding_time_ms',    # рав unix ms (для сортировки)
-            'funding_rate',       # десятичное (напр. 0.00000625)
-            'funding_rate_pct',   # в процентах (напр. 0.000625%)
-            'mark_price',
-            'premium',
+            'datetime_utc', 'funding_time_ms',
+            'funding_rate', 'funding_rate_pct',
+            'mark_price', 'premium',
         ]
         w = csv.DictWriter(buf, fieldnames=fieldnames)
         w.writeheader()
@@ -118,7 +174,6 @@ async def debug(asset: str):
     start_ms = int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
     dex  = ASSETS[asset]['hyperliquid_dex']
     coin = ASSETS[asset]['hyperliquid_coin']
-
     try:
         async with hx.AsyncClient(timeout=15.0) as c:
             r = await c.get('https://www.okx.com/api/v5/public/funding-rate-history',
@@ -126,18 +181,15 @@ async def debug(asset: str):
             results['okx'] = {'status': r.status_code, 'sample': r.json().get('data', [])[:2]}
     except Exception as e:
         results['okx'] = {'error': str(e)}
-
     try:
         async with hx.AsyncClient(timeout=15.0) as c:
-            rm = await c.post('https://api.hyperliquid.xyz/info',
-                              json={'type': 'meta', 'dex': dex})
+            rm = await c.post('https://api.hyperliquid.xyz/info', json={'type': 'meta', 'dex': dex})
             universe = rm.json().get('universe', []) if rm.status_code == 200 else []
             names = [u.get('name', '') for u in universe]
             results['hyperliquid_meta'] = {'dex': dex, 'status': rm.status_code,
                                            'total_coins': len(names), 'all_coins': names}
     except Exception as e:
         results['hyperliquid_meta'] = {'error': str(e)}
-
     try:
         async with hx.AsyncClient(timeout=15.0) as c:
             r = await c.post('https://api.hyperliquid.xyz/info',
@@ -149,5 +201,4 @@ async def debug(asset: str):
             }
     except Exception as e:
         results['hyperliquid_funding'] = {'error': str(e)}
-
     return JSONResponse(results)
