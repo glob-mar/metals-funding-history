@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>История фандинга — металлы</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📊 История фандинга по металлам</h1>
+    <p>Binance · OKX · Hyperliquid &mdash; XAU, XAG, XPT, XPD</p>
+  </header>
+
+  <div class="cards">
+    {% for code, meta in assets.items() %}
+    <div class="card">
+      <div class="card-header">
+        <span class="badge">{{ code }}</span>
+        <h2>{{ meta.label }}</h2>
+      </div>
+      <table class="tickers">
+        <tr><td>Binance</td><td><code>{{ meta.binance }}</code></td></tr>
+        <tr><td>OKX</td><td><code>{{ meta.okx }}</code></td></tr>
+        <tr><td>Hyperliquid</td><td><code>{{ meta.hyperliquid }}</code></td></tr>
+      </table>
+      <div class="btns">
+        <button class="btn-sync" onclick="syncAsset('{{ code }}')">
+          ⬇ Собрать историю
+        </button>
+        <button class="btn-view" onclick="viewAsset('{{ code }}')">
+          👁 Показать
+        </button>
+        <a class="btn-csv" href="/api/export/{{ code }}.csv">
+          ⬇ CSV
+        </a>
+      </div>
+      <div class="status" id="status-{{ code }}"></div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <section class="viewer" id="viewer" style="display:none">
+    <div class="viewer-header">
+      <h2 id="viewer-title">Данные</h2>
+      <button class="btn-close" onclick="document.getElementById('viewer').style.display='none'">✕ Закрыть</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Биржа</th>
+            <th>Актив</th>
+            <th>Тикер</th>
+            <th>Дата и время</th>
+            <th>Funding rate</th>
+            <th>Mark price</th>
+            <th>Premium</th>
+          </tr>
+        </thead>
+        <tbody id="trows"></tbody>
+      </table>
+    </div>
+    <p class="hint">Показаны последние 500 записей. Полные данные — в CSV.</p>
+  </section>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
