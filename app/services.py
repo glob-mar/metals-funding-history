@@ -19,20 +19,11 @@ def _now_ms() -> int:
 
 
 def _months_this_year():
-    """Возвращает список (year, month) от января до текущего месяца включительно."""
     now = datetime.now(tz=timezone.utc)
-    months = []
-    for m in range(1, now.month + 1):
-        months.append((now.year, m))
-    return months
+    return [(now.year, m) for m in range(1, now.month + 1)]
 
 
 async def _binance_vision(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    """
-    Скачивает данные с data.binance.vision — публичный архив Binance.
-    Файлы: ZIP с CSV внутри.
-    URL пример: https://data.binance.vision/data/futures/um/monthly/fundingRate/XAUUSDT/XAUUSDT-fundingRate-2026-01.zip
-    """
     symbol = ASSETS[asset]['binance']
     rows = []
     year_start = _year_start_ms()
@@ -45,27 +36,33 @@ async def _binance_vision(client: httpx.AsyncClient, asset: str) -> list[dict]:
             r = await client.get(url, timeout=30.0)
             if r.status_code == 404:
                 continue
-            r.raise_for_status()
+            if r.status_code != 200:
+                print(f'Binance Vision {symbol} {year}-{month_str}: HTTP {r.status_code}')
+                continue
             with zipfile.ZipFile(BytesIO(r.content)) as z:
                 csv_name = z.namelist()[0]
                 with z.open(csv_name) as f:
-                    reader = csv.reader(line.decode() for line in f)
-                    next(reader, None)  # пропустить заголовок
-                    for line in reader:
-                        if len(line) < 3:
-                            continue
+                    lines = f.read().decode('utf-8').splitlines()
+                reader = csv.reader(lines)
+                next(reader, None)  # header
+                for line in reader:
+                    if len(line) < 3:
+                        continue
+                    try:
                         ft = int(line[1])
-                        if ft < year_start:
-                            continue
-                        rows.append({
-                            'exchange': 'binance',
-                            'asset': asset,
-                            'symbol': symbol,
-                            'funding_time': ft,
-                            'funding_rate': float(line[2]),
-                            'mark_price': None,
-                            'premium': None,
-                        })
+                    except (ValueError, IndexError):
+                        continue
+                    if ft < year_start:
+                        continue
+                    rows.append({
+                        'exchange': 'binance',
+                        'asset': asset,
+                        'symbol': symbol,
+                        'funding_time': ft,
+                        'funding_rate': float(line[2]),
+                        'mark_price': None,
+                        'premium': None,
+                    })
         except Exception as e:
             print(f'Binance Vision {symbol} {year}-{month_str}: {e}')
             continue
@@ -110,45 +107,36 @@ async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
 
 
 async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    """
-    Пробуем сначала базовый тикер (XAU),
-    если 500/пусто — пробуем HIP-3 индекс (@7, @8 и т.д. из config).
-    """
-    coin_base  = asset           # 'XAU'
-    coin_hip3  = ASSETS[asset]['hyperliquid']  # '@7'
-    start      = _year_start_ms()
-    end        = _now_ms()
-
-    rows = []
-    for coin in [coin_base, coin_hip3]:
-        try:
-            r = await client.post(HL_URL, json={
-                'type': 'fundingHistory',
-                'coin': coin,
-                'startTime': start,
-                'endTime': end,
-            }, timeout=20.0)
-            if r.status_code != 200:
-                continue
-            data = r.json()
-            if not data:
-                continue
-            for d in data:
-                rows.append({
-                    'exchange': 'hyperliquid',
-                    'asset': asset,
-                    'symbol': coin,
-                    'funding_time': int(d['time']),
-                    'funding_rate': float(d['fundingRate']),
-                    'mark_price': None,
-                    'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
-                })
-            if rows:
-                break  # нашли данные — дальше не пробуем
-        except Exception as e:
-            print(f'Hyperliquid {coin}: {e}')
-            continue
-
+    coin = ASSETS[asset]['hyperliquid']  # GOLD, SILVER, PLATINUM, PALLADIUM
+    start = _year_start_ms()
+    end   = _now_ms()
+    rows  = []
+    try:
+        r = await client.post(HL_URL, json={
+            'type': 'fundingHistory',
+            'coin': coin,
+            'startTime': start,
+            'endTime': end,
+        }, timeout=20.0)
+        if r.status_code != 200:
+            print(f'Hyperliquid {coin}: HTTP {r.status_code} {r.text[:200]}')
+            return rows
+        data = r.json()
+        if not data:
+            print(f'Hyperliquid {coin}: empty response')
+            return rows
+        for d in data:
+            rows.append({
+                'exchange': 'hyperliquid',
+                'asset': asset,
+                'symbol': coin,
+                'funding_time': int(d['time']),
+                'funding_rate': float(d['fundingRate']),
+                'mark_price': None,
+                'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
+            })
+    except Exception as e:
+        print(f'Hyperliquid {coin}: {e}')
     return rows
 
 
@@ -157,23 +145,16 @@ async def collect(asset: str) -> list[dict]:
     headers = {'User-Agent': 'metals-funding-history/1.0'}
     async with httpx.AsyncClient(timeout=timeout, headers=headers) as c:
         rows = []
-
-        # Binance через публичный архив (не блокируется)
         try:
             rows += await _binance_vision(c, asset)
         except Exception as e:
             print(f'Binance error ({asset}): {e}')
-
-        # OKX
         try:
             rows += await _okx(c, asset)
         except Exception as e:
             print(f'OKX error ({asset}): {e}')
-
-        # Hyperliquid
         try:
             rows += await _hyperliquid(c, asset)
         except Exception as e:
             print(f'Hyperliquid error ({asset}): {e}')
-
         return rows
