@@ -16,14 +16,14 @@ ASSETS = {
     'XPT': {
         'label': 'Платина (Platinum)',
         'okx': 'XPT-USDT-SWAP',
-        'binance': None,
+        'binance': 'XPTUSDT',
         'hyperliquid_dex': 'xyz',
         'hyperliquid_coin': 'xyz:PLATINUM',
     },
     'XPD': {
         'label': 'Палладий (Palladium)',
         'okx': 'XPD-USDT-SWAP',
-        'binance': None,
+        'binance': 'XPDUSDT',
         'hyperliquid_dex': 'xyz',
         'hyperliquid_coin': 'xyz:PALLADIUM',
     },
@@ -45,7 +45,7 @@ ASSETS = {
 
 BINANCE_FAPI = 'https://fapi.binance.com/fapi/v1/fundingRate'
 # Периодов в год по бирже
-# Binance золото/серебро: каждые 8ч (1095)
+# Binance золото/серебро/платина/палладий: каждые 8ч (1095)
 # Binance энергетика: каждые 8ч (1095)
 PERIODS_PER_YEAR = {
     'hyperliquid': 8760,
