@@ -1,14 +1,18 @@
 async function syncAsset(asset) {
   const el = document.getElementById('status-' + asset)
-  el.textContent = '⏳ Собираю данные с бирж... это может занять 10-30 секунд'
+  el.textContent = '⏳ Собираю данные с бирж... это может занять 15-30 секунд'
 
   try {
     const r = await fetch('/api/sync/' + asset, { method: 'POST' })
     const data = await r.json()
-    if (!r.ok) throw new Error(data.error || 'Ошибка сервера')
-    el.textContent = `✅ Готово! Получено строк: ${data.received}, новых сохранено: ${data.new}`
+    if (!data.ok) {
+      el.textContent = '❌ Ошибка: ' + (data.error || 'неизвестная ошибка')
+      console.error(data.detail || data.error)
+      return
+    }
+    el.textContent = `✅ Готово! Получено: ${data.received}, новых в базе: ${data.new}`
   } catch (e) {
-    el.textContent = '❌ Ошибка: ' + e.message
+    el.textContent = '❌ Ошибка сети: ' + e.message
   }
 }
 
@@ -25,6 +29,13 @@ async function viewAsset(asset) {
   try {
     const r = await fetch('/api/history/' + asset)
     const data = await r.json()
+
+    if (!data.ok) {
+      title.textContent = 'Ошибка'
+      tbody.innerHTML = `<tr><td colspan="7">❌ ${data.error}</td></tr>`
+      return
+    }
+
     title.textContent = asset + ' — ' + data.count + ' строк'
 
     if (!data.rows || !data.rows.length) {
@@ -36,11 +47,11 @@ async function viewAsset(asset) {
     tbody.innerHTML = rows.map(row => {
       const dt = new Date(row.funding_time).toLocaleString('ru-RU')
       const rate = (row.funding_rate * 100).toFixed(5) + '%'
-      const exclr = row.exchange === 'binance'
-        ? '#f0b90b' : row.exchange === 'okx'
-        ? '#00b4d8' : '#a78bfa'
+      const color = row.exchange === 'binance' ? '#f0b90b'
+                  : row.exchange === 'okx'     ? '#00b4d8'
+                  :                              '#a78bfa'
       return `<tr>
-        <td style="color:${exclr};font-weight:600">${row.exchange}</td>
+        <td style="color:${color};font-weight:600">${row.exchange}</td>
         <td>${row.asset}</td>
         <td><code style="color:#3fb950">${row.symbol}</code></td>
         <td>${dt}</td>
