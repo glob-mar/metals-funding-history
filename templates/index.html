@@ -1,69 +1,53 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>История фандинга — металлы</title>
-  <link rel="stylesheet" href="/static/style.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Funding Rate History</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>📊 История фандинга по металлам</h1>
-    <p>Binance · OKX · Hyperliquid &mdash; XAU, XAG, XPT, XPD</p>
-  </header>
+<div class="container">
+  <h1>📈 Funding Rate History</h1>
+  <p class="subtitle">История ставок финансирования: OKX + Hyperliquid</p>
 
-  <div class="cards">
-    {% for code, meta in assets.items() %}
-    <div class="card">
-      <div class="card-header">
-        <span class="badge">{{ code }}</span>
-        <h2>{{ meta.label }}</h2>
-      </div>
-      <table class="tickers">
-        <tr><td>Binance</td><td><code>{{ meta.binance }}</code></td></tr>
-        <tr><td>OKX</td><td><code>{{ meta.okx }}</code></td></tr>
-        <tr><td>Hyperliquid</td><td><code>{{ meta.hyperliquid }}</code></td></tr>
-      </table>
-      <div class="btns">
-        <button class="btn-sync" onclick="syncAsset('{{ code }}')">
-          ⬇ Собрать историю
-        </button>
-        <button class="btn-view" onclick="viewAsset('{{ code }}')">
-          👁 Показать
-        </button>
-        <a class="btn-csv" href="/api/export/{{ code }}.csv">
-          ⬇ CSV
-        </a>
-      </div>
-      <div class="status" id="status-{{ code }}"></div>
+  <div class="grid">
+  {% for key, info in assets.items() %}
+  <div class="card">
+    <h2>{{ info.label }}</h2>
+    <p id="status-{{ key }}" class="status">—</p>
+    <div class="btn-row">
+      <button class="btn green" onclick="syncAsset('{{ key }}')">&#x2B07; Собрать</button>
+      <button class="btn blue" onclick="viewAsset('{{ key }}')">&#x1F441; Показать</button>
     </div>
-    {% endfor %}
+    <div class="btn-row export-row">
+      <span class="label">Скачать CSV:</span>
+      <a class="btn yellow small" href="/api/export/{{ key }}.csv">Все</a>
+      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=okx">OKX</a>
+      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=hyperliquid">Hyperliquid</a>
+    </div>
+    <div class="btn-row">
+      <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">&#x1F4CA; Годовой доход</a>
+    </div>
+  </div>
+  {% endfor %}
   </div>
 
-  <section class="viewer" id="viewer" style="display:none">
-    <div class="viewer-header">
-      <h2 id="viewer-title">Данные</h2>
-      <button class="btn-close" onclick="document.getElementById('viewer').style.display='none'">✕ Закрыть</button>
+  <div id="viewer" style="display:none;margin-top:2rem">
+    <h3 id="viewer-title"></h3>
+    <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>exchange</th><th>asset</th><th>symbol</th>
+          <th>datetime (UTC)</th><th>funding_rate</th>
+          <th>rate %</th><th>premium</th>
+        </tr>
+      </thead>
+      <tbody id="trows"></tbody>
+    </table>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Биржа</th>
-            <th>Актив</th>
-            <th>Тикер</th>
-            <th>Дата и время</th>
-            <th>Funding rate</th>
-            <th>Mark price</th>
-            <th>Premium</th>
-          </tr>
-        </thead>
-        <tbody id="trows"></tbody>
-      </table>
-    </div>
-    <p class="hint">Показаны последние 500 записей. Полные данные — в CSV.</p>
-  </section>
+  </div>
 </div>
 <script src="/static/app.js"></script>
 </body>

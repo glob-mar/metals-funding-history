@@ -4,8 +4,7 @@ from .config import ASSETS
 
 OKX_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 HL_URL  = 'https://api.hyperliquid.xyz/info'
-
-HL_CHUNK_MS = 7 * 24 * 3600 * 1000  # 7 дней в миллисекундах
+HL_CHUNK_MS = 7 * 24 * 3600 * 1000  # 7 дней
 
 
 def _year_start_ms() -> int:
@@ -17,7 +16,9 @@ def _now_ms() -> int:
 
 
 async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    inst = ASSETS[asset]['okx']
+    inst = ASSETS[asset].get('okx')
+    if not inst:
+        return []
     rows = []
     limit_ts = _year_start_ms()
     after = None
@@ -56,35 +57,23 @@ async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
 
 
 async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    """
-    Собирает funding rate с Hyperliquid HIP-3 чунками по 7 дней,
-    чтобы обойти лимит на количество записей в одном запросе.
-    """
     dex  = ASSETS[asset]['hyperliquid_dex']
     coin = ASSETS[asset]['hyperliquid_coin']
     rows = []
     seen = set()
-
     start = _year_start_ms()
     end   = _now_ms()
     chunk_start = start
     chunk_num = 0
-
     while chunk_start < end:
         chunk_end = min(chunk_start + HL_CHUNK_MS, end)
         chunk_num += 1
         try:
             r = await client.post(HL_URL,
-                json={
-                    'type': 'fundingHistory',
-                    'coin': coin,
-                    'dex': dex,
-                    'startTime': chunk_start,
-                    'endTime': chunk_end,
-                },
+                json={'type': 'fundingHistory', 'coin': coin, 'dex': dex,
+                      'startTime': chunk_start, 'endTime': chunk_end},
                 timeout=20.0)
             if r.status_code != 200:
-                print(f'Hyperliquid chunk {chunk_num}: HTTP {r.status_code}')
                 chunk_start = chunk_end + 1
                 continue
             data = r.json()
@@ -111,9 +100,8 @@ async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
         except Exception as e:
             print(f'Hyperliquid {coin} chunk {chunk_num}: {e}')
         chunk_start = chunk_end + 1
-
     rows.sort(key=lambda x: x['funding_time'])
-    print(f'Hyperliquid {coin}: DONE, {len(rows)} rows total')
+    print(f'Hyperliquid {coin}: DONE, {len(rows)} rows')
     return rows
 
 
