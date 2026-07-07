@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 import httpx
-from .config import ASSETS
+from .config import ASSETS, BINANCE_FAPI
 
 OKX_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 HL_URL  = 'https://api.hyperliquid.xyz/info'
-HL_CHUNK_MS = 7 * 24 * 3600 * 1000  # 7 дней
+HL_CHUNK_MS = 7 * 24 * 3600 * 1000  # 7 дней в мс
 
 
 def _year_start_ms() -> int:
@@ -56,6 +56,62 @@ async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
     return rows
 
 
+async def _binance(client: httpx.AsyncClient, asset: str) -> list[dict]:
+    """
+    Binance USDM fapi/v1/fundingRate.
+    Пагинация через startTime: берём последний fundingTime + 1 и повторяем.
+    Лимит 1000 записей за запрос.
+    """
+    symbol = ASSETS[asset].get('binance')
+    if not symbol:
+        return []
+    rows = []
+    start = _year_start_ms()
+    end   = _now_ms()
+    page  = 0
+    while start < end:
+        params = {
+            'symbol':    symbol,
+            'startTime': start,
+            'endTime':   end,
+            'limit':     1000,
+        }
+        r = await client.get(BINANCE_FAPI, params=params, timeout=20.0)
+        if r.status_code != 200:
+            print(f'Binance {symbol}: HTTP {r.status_code} {r.text[:200]}')
+            break
+        data = r.json()
+        if not isinstance(data, list) or not data:
+            break
+        page += 1
+        for d in data:
+            rows.append({
+                'exchange':    'binance',
+                'asset':       asset,
+                'symbol':      symbol,
+                'funding_time': int(d['fundingTime']),
+                'funding_rate': float(d['fundingRate']),
+                'mark_price':   float(d['markPrice']) if d.get('markPrice') not in (None, '', '0') else None,
+                'premium':      None,
+            })
+        print(f'Binance {symbol} page {page}: +{len(data)}, total: {len(rows)}')
+        if len(data) < 1000:
+            break
+        # следующая страница: с следующей миллисекунды после последней записи
+        start = int(data[-1]['fundingTime']) + 1
+    # дедупликация
+    seen = set()
+    unique = []
+    for r in rows:
+        key = (r['exchange'], r['symbol'], r['funding_time'])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    unique.sort(key=lambda x: x['funding_time'])
+    print(f'Binance {symbol}: DONE, {len(unique)} rows')
+    return unique
+
+
 async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
     dex  = ASSETS[asset]['hyperliquid_dex']
     coin = ASSETS[asset]['hyperliquid_coin']
@@ -96,12 +152,12 @@ async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
                     'mark_price': None,
                     'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
                 })
-            print(f'Hyperliquid {coin} chunk {chunk_num}: +{new_in_chunk}, total: {len(rows)}')
+            print(f'HL {coin} chunk {chunk_num}: +{new_in_chunk}, total: {len(rows)}')
         except Exception as e:
-            print(f'Hyperliquid {coin} chunk {chunk_num}: {e}')
+            print(f'HL {coin} chunk {chunk_num}: {e}')
         chunk_start = chunk_end + 1
     rows.sort(key=lambda x: x['funding_time'])
-    print(f'Hyperliquid {coin}: DONE, {len(rows)} rows')
+    print(f'HL {coin}: DONE, {len(rows)} rows')
     return rows
 
 
@@ -114,6 +170,10 @@ async def collect(asset: str) -> list[dict]:
             rows += await _okx(c, asset)
         except Exception as e:
             print(f'OKX error ({asset}): {e}')
+        try:
+            rows += await _binance(c, asset)
+        except Exception as e:
+            print(f'Binance error ({asset}): {e}')
         try:
             rows += await _hyperliquid(c, asset)
         except Exception as e:

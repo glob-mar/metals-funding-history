@@ -3,20 +3,14 @@ import csv
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Optional
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from typing import Optional
-from .config import ASSETS
+from .config import ASSETS, PERIODS_PER_YEAR
 from .db import init_db, upsert_rows, get_history
 from .services import collect
-
-PERIODS_PER_YEAR = {
-    'hyperliquid': 8760,
-    'okx': 1095,
-    'binance': 1095,
-}
 
 
 def ms_to_dt(ms: int) -> str:
@@ -79,9 +73,10 @@ async def stats(asset: str):
     try:
         rows = await get_history(asset)
         if not rows:
-            return JSONResponse({'ok': True, 'asset': asset, 'message': 'Нет данных'})
+            return JSONResponse({'ok': True, 'asset': asset,
+                                 'message': 'Нет данных. Нажми «Собрать» сначала.'})
         from collections import defaultdict
-        by_exchange = defaultdict(list)
+        by_exchange: dict = defaultdict(list)
         for r in rows:
             by_exchange[r['exchange']].append(r['funding_rate'])
         result = {'ok': True, 'asset': asset, 'total_rows': len(rows), 'by_exchange': {}}
@@ -89,19 +84,19 @@ async def stats(asset: str):
             n = len(rates)
             avg = sum(rates) / n
             ppy = PERIODS_PER_YEAR.get(exchange, 8760)
-            annual_yield = avg * ppy * 100
-            positives = sum(1 for r in rates if r > 0)
-            negatives = sum(1 for r in rates if r < 0)
+            annual = avg * ppy * 100
+            pos = sum(1 for r in rates if r > 0)
+            neg = sum(1 for r in rates if r < 0)
             result['by_exchange'][exchange] = {
-                'periods': n,
+                'periods':          n,
                 'periods_per_year': ppy,
-                'avg_rate_pct': f'{avg * 100:.6f}%',
-                'annualized_yield': f'{annual_yield:.4f}%',
-                'max_rate_pct': f'{max(rates) * 100:.6f}%',
-                'min_rate_pct': f'{min(rates) * 100:.6f}%',
-                'positive_periods': positives,
-                'negative_periods': negatives,
-                'pct_positive': f'{positives / n * 100:.1f}%',
+                'avg_rate_pct':     f'{avg * 100:.6f}%',
+                'annualized_yield': f'{annual:.4f}%',
+                'max_rate_pct':     f'{max(rates) * 100:.6f}%',
+                'min_rate_pct':     f'{min(rates) * 100:.6f}%',
+                'positive_periods': pos,
+                'negative_periods': neg,
+                'pct_positive':     f'{pos / n * 100:.1f}%',
             }
         return JSONResponse(result)
     except Exception as e:
@@ -111,9 +106,6 @@ async def stats(asset: str):
 
 @app.get('/api/export/{asset}.csv')
 async def export(asset: str, exchange: Optional[str] = Query(None)):
-    """
-    Скачать CSV. Необязательный параметр ?exchange=okx или ?exchange=hyperliquid
-    """
     asset = asset.upper()
     if asset not in ASSETS:
         return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
@@ -164,29 +156,45 @@ async def debug(asset: str):
     results = {}
     now = datetime.now(tz=timezone.utc)
     start_ms = int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
-    dex  = ASSETS[asset]['hyperliquid_dex']
-    coin = ASSETS[asset]['hyperliquid_coin']
-    okx_inst = ASSETS[asset].get('okx')
-    if okx_inst:
+    cfg = ASSETS[asset]
+
+    # OKX
+    if cfg.get('okx'):
         try:
             async with hx.AsyncClient(timeout=15.0) as c:
                 r = await c.get('https://www.okx.com/api/v5/public/funding-rate-history',
-                                params={'instId': okx_inst, 'limit': 2})
-                results['okx'] = {'status': r.status_code, 'instId': okx_inst,
+                                params={'instId': cfg['okx'], 'limit': 2})
+                results['okx'] = {'status': r.status_code, 'instId': cfg['okx'],
                                   'sample': r.json().get('data', [])[:2]}
         except Exception as e:
             results['okx'] = {'error': str(e)}
-    else:
-        results['okx'] = {'note': 'Не поддерживается для этого актива'}
+
+    # Binance
+    if cfg.get('binance'):
+        try:
+            async with hx.AsyncClient(timeout=15.0) as c:
+                r = await c.get('https://fapi.binance.com/fapi/v1/fundingRate',
+                                params={'symbol': cfg['binance'], 'limit': 2,
+                                        'startTime': start_ms})
+                results['binance'] = {'status': r.status_code, 'symbol': cfg['binance'],
+                                      'sample': r.json()[:2] if r.status_code == 200 else r.text[:200]}
+        except Exception as e:
+            results['binance'] = {'error': str(e)}
+
+    # Hyperliquid
     try:
         async with hx.AsyncClient(timeout=15.0) as c:
             r = await c.post('https://api.hyperliquid.xyz/info',
-                             json={'type': 'fundingHistory', 'coin': coin, 'dex': dex,
-                                   'startTime': start_ms, 'endTime': start_ms + 86400000 * 3})
+                             json={'type': 'fundingHistory',
+                                   'coin': cfg['hyperliquid_coin'],
+                                   'dex': cfg['hyperliquid_dex'],
+                                   'startTime': start_ms,
+                                   'endTime': start_ms + 86400000 * 3})
             results['hyperliquid'] = {
-                'coin': coin, 'status': r.status_code,
+                'coin': cfg['hyperliquid_coin'], 'status': r.status_code,
                 'sample': r.json()[:3] if r.status_code == 200 and isinstance(r.json(), list) else r.text[:300]
             }
     except Exception as e:
         results['hyperliquid'] = {'error': str(e)}
+
     return JSONResponse(results)

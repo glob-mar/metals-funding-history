@@ -9,25 +9,29 @@
 <body>
 <div class="container">
   <h1>📈 Funding Rate History</h1>
-  <p class="subtitle">История ставок финансирования: OKX + Hyperliquid</p>
+  <p class="subtitle">История ставок финансирования: OKX · Binance · Hyperliquid</p>
 
   <div class="grid">
   {% for key, info in assets.items() %}
   <div class="card">
     <h2>{{ info.label }}</h2>
+    <div class="badges">
+      {% if info.okx %}<span class="badge okx">OKX</span>{% endif %}
+      {% if info.binance %}<span class="badge bnb">Binance</span>{% endif %}
+      <span class="badge hl">Hyperliquid</span>
+    </div>
     <p id="status-{{ key }}" class="status">—</p>
     <div class="btn-row">
       <button class="btn green" onclick="syncAsset('{{ key }}')">&#x2B07; Собрать</button>
       <button class="btn blue" onclick="viewAsset('{{ key }}')">&#x1F441; Показать</button>
+      <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">📊 Доход</a>
     </div>
     <div class="btn-row export-row">
-      <span class="label">Скачать CSV:</span>
+      <span class="label">↓ CSV:</span>
       <a class="btn yellow small" href="/api/export/{{ key }}.csv">Все</a>
-      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=okx">OKX</a>
-      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=hyperliquid">Hyperliquid</a>
-    </div>
-    <div class="btn-row">
-      <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">&#x1F4CA; Годовой доход</a>
+      {% if info.okx %}<a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=okx">OKX</a>{% endif %}
+      {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=binance">Binance</a>{% endif %}
+      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=hyperliquid">HL</a>
     </div>
   </div>
   {% endfor %}
@@ -41,7 +45,7 @@
         <tr>
           <th>exchange</th><th>asset</th><th>symbol</th>
           <th>datetime (UTC)</th><th>funding_rate</th>
-          <th>rate %</th><th>premium</th>
+          <th>rate %</th><th>mark_price</th><th>premium</th>
         </tr>
       </thead>
       <tbody id="trows"></tbody>
