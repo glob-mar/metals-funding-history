@@ -18,9 +18,45 @@ def _now_ms() -> int:
     return int(datetime.now(tz=timezone.utc).timestamp() * 1000)
 
 
-def _months_this_year():
+def _months_this_year_completed():
+    """Возвращает завершённые месяцы (не текущий) — архив Binance Vision обновляется с задержкой."""
     now = datetime.now(tz=timezone.utc)
-    return [(now.year, m) for m in range(1, now.month + 1)]
+    # Берём все месяцы ДО текущего (они точно есть в архиве)
+    return [(now.year, m) for m in range(1, now.month)]
+
+
+async def _get_hyperliquid_coin(client: httpx.AsyncClient, asset: str) -> str | None:
+    """
+    Ищет правильный тикер монеты на Hyperliquid через /meta.
+    Пробует варианты: GOLD, XAU, xau, gold и т.д.
+    """
+    aliases = {
+        'XAU': ['GOLD', 'XAU', 'XAUUSD', 'PAXGUSDT'],
+        'XAG': ['SILVER', 'XAG', 'XAGUSD'],
+        'XPT': ['PLATINUM', 'XPT', 'XPTUSD'],
+        'XPD': ['PALLADIUM', 'XPD', 'XPDUSD'],
+    }
+    candidates = aliases.get(asset, [ASSETS[asset]['hyperliquid']])
+
+    # Получаем список всех монет через meta
+    try:
+        r = await client.post(HL_URL, json={'type': 'meta'}, timeout=15.0)
+        if r.status_code == 200:
+            data = r.json()
+            universe = data.get('universe', [])
+            all_coins = {u['name'].upper(): u['name'] for u in universe}
+            for c in candidates:
+                if c.upper() in all_coins:
+                    return all_coins[c.upper()]
+            # Если не нашли точное совпадение — ищем по подстроке
+            for c in candidates:
+                for name in all_coins:
+                    if c.upper() in name:
+                        return all_coins[name]
+    except Exception as e:
+        print(f'Hyperliquid meta error: {e}')
+
+    return None
 
 
 async def _binance_vision(client: httpx.AsyncClient, asset: str) -> list[dict]:
@@ -28,13 +64,19 @@ async def _binance_vision(client: httpx.AsyncClient, asset: str) -> list[dict]:
     rows = []
     year_start = _year_start_ms()
 
-    for year, month in _months_this_year():
+    months = _months_this_year_completed()
+    if not months:
+        print(f'Binance Vision: нет завершённых месяцев (начало года), пропускаем')
+        return rows
+
+    for year, month in months:
         month_str = f'{month:02d}'
         fname = f'{symbol}-fundingRate-{year}-{month_str}.zip'
         url = f'{BINANCE_VISION_BASE}/{symbol}/{fname}'
         try:
             r = await client.get(url, timeout=30.0)
             if r.status_code == 404:
+                print(f'Binance Vision {symbol} {year}-{month_str}: 404 (нет файла)')
                 continue
             if r.status_code != 200:
                 print(f'Binance Vision {symbol} {year}-{month_str}: HTTP {r.status_code}')
@@ -43,26 +85,27 @@ async def _binance_vision(client: httpx.AsyncClient, asset: str) -> list[dict]:
                 csv_name = z.namelist()[0]
                 with z.open(csv_name) as f:
                     lines = f.read().decode('utf-8').splitlines()
-                reader = csv.reader(lines)
-                next(reader, None)  # header
-                for line in reader:
-                    if len(line) < 3:
-                        continue
-                    try:
-                        ft = int(line[1])
-                    except (ValueError, IndexError):
-                        continue
-                    if ft < year_start:
-                        continue
-                    rows.append({
-                        'exchange': 'binance',
-                        'asset': asset,
-                        'symbol': symbol,
-                        'funding_time': ft,
-                        'funding_rate': float(line[2]),
-                        'mark_price': None,
-                        'premium': None,
-                    })
+            reader = csv.reader(lines)
+            next(reader, None)  # header
+            for line in reader:
+                if len(line) < 3:
+                    continue
+                try:
+                    ft = int(line[1])
+                except (ValueError, IndexError):
+                    continue
+                if ft < year_start:
+                    continue
+                rows.append({
+                    'exchange': 'binance',
+                    'asset': asset,
+                    'symbol': symbol,
+                    'funding_time': ft,
+                    'funding_rate': float(line[2]),
+                    'mark_price': None,
+                    'premium': None,
+                })
+            print(f'Binance Vision {symbol} {year}-{month_str}: OK, строк: {len(rows)}')
         except Exception as e:
             print(f'Binance Vision {symbol} {year}-{month_str}: {e}')
             continue
@@ -107,7 +150,12 @@ async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
 
 
 async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    coin = ASSETS[asset]['hyperliquid']  # GOLD, SILVER, PLATINUM, PALLADIUM
+    coin = await _get_hyperliquid_coin(client, asset)
+    if not coin:
+        print(f'Hyperliquid: не найден тикер для {asset}, пропускаем')
+        return []
+
+    print(f'Hyperliquid: используем тикер "{coin}" для {asset}')
     start = _year_start_ms()
     end   = _now_ms()
     rows  = []
@@ -123,7 +171,7 @@ async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
             return rows
         data = r.json()
         if not data:
-            print(f'Hyperliquid {coin}: empty response')
+            print(f'Hyperliquid {coin}: пустой ответ')
             return rows
         for d in data:
             rows.append({
@@ -135,6 +183,7 @@ async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
                 'mark_price': None,
                 'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
             })
+        print(f'Hyperliquid {coin}: OK, строк: {len(rows)}')
     except Exception as e:
         print(f'Hyperliquid {coin}: {e}')
     return rows

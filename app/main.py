@@ -94,21 +94,18 @@ async def debug(asset: str):
     results = {}
     now = datetime.now(tz=timezone.utc)
     year, month = now.year, now.month
-    month_str = f'{month:02d}'
     start_ms = int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
-    # Binance Vision
+    # Binance Vision — берём предыдущий месяц
+    prev_month = month - 1 if month > 1 else 12
+    prev_year  = year if month > 1 else year - 1
     symbol_b = ASSETS[asset]['binance']
-    fname = f'{symbol_b}-fundingRate-{year}-{month_str}.zip'
+    fname = f'{symbol_b}-fundingRate-{prev_year}-{prev_month:02d}.zip'
     url_b = f'{BINANCE_VISION_BASE}/{symbol_b}/{fname}'
     try:
         async with httpx.AsyncClient(timeout=20.0) as c:
             r = await c.get(url_b)
-            results['binance_vision'] = {
-                'url': url_b,
-                'status': r.status_code,
-                'size_bytes': len(r.content)
-            }
+            results['binance_vision'] = {'url': url_b, 'status': r.status_code, 'size_bytes': len(r.content)}
     except Exception as e:
         results['binance_vision'] = {'error': str(e)}
 
@@ -117,25 +114,24 @@ async def debug(asset: str):
         async with httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get('https://www.okx.com/api/v5/public/funding-rate-history',
                             params={'instId': ASSETS[asset]['okx'], 'limit': 3})
-            data = r.json()
-            results['okx'] = {'status': r.status_code, 'sample': data.get('data', [])[:2]}
+            results['okx'] = {'status': r.status_code, 'sample': r.json().get('data', [])[:2]}
     except Exception as e:
         results['okx'] = {'error': str(e)}
 
-    # Hyperliquid
+    # Hyperliquid — meta + fundingHistory
     try:
         async with httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.post('https://api.hyperliquid.xyz/info',
-                             json={'type': 'fundingHistory',
-                                   'coin': ASSETS[asset]['hyperliquid'],
-                                   'startTime': start_ms,
-                                   'endTime': start_ms + 86400000 * 7})
-            results['hyperliquid'] = {
-                'coin': ASSETS[asset]['hyperliquid'],
-                'status': r.status_code,
-                'sample': r.json()[:2] if r.status_code == 200 else r.text[:300]
+            rm = await c.post('https://api.hyperliquid.xyz/info', json={'type': 'meta'})
+            universe = rm.json().get('universe', []) if rm.status_code == 200 else []
+            all_names = [u['name'] for u in universe]
+            # ищем тикер
+            candidates = ['GOLD','XAU','SILVER','XAG','PLATINUM','XPT','PALLADIUM','XPD']
+            found_metals = [n for n in all_names if n.upper() in candidates or any(c in n.upper() for c in candidates)]
+            results['hyperliquid_meta'] = {
+                'total_coins': len(all_names),
+                'found_metals': found_metals[:20]
             }
     except Exception as e:
-        results['hyperliquid'] = {'error': str(e)}
+        results['hyperliquid_meta'] = {'error': str(e)}
 
     return JSONResponse(results)
