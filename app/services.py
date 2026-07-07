@@ -5,6 +5,8 @@ from .config import ASSETS
 OKX_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 HL_URL  = 'https://api.hyperliquid.xyz/info'
 
+HL_CHUNK_MS = 7 * 24 * 3600 * 1000  # 7 дней в миллисекундах
+
 
 def _year_start_ms() -> int:
     return int(datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
@@ -15,7 +17,6 @@ def _now_ms() -> int:
 
 
 async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
-    """Собирает всю историю funding rate на OKX за текущий год через пагинацию."""
     inst = ASSETS[asset]['okx']
     rows = []
     limit_ts = _year_start_ms()
@@ -56,70 +57,68 @@ async def _okx(client: httpx.AsyncClient, asset: str) -> list[dict]:
 
 async def _hyperliquid(client: httpx.AsyncClient, asset: str) -> list[dict]:
     """
-    Собирает funding rate с Hyperliquid HIP-3 (TradeXYZ).
-    HIP-3 рынки требуют параметр dex=xyz и тикер в формате xyz:GOLD.
+    Собирает funding rate с Hyperliquid HIP-3 чунками по 7 дней,
+    чтобы обойти лимит на количество записей в одном запросе.
     """
     dex  = ASSETS[asset]['hyperliquid_dex']
     coin = ASSETS[asset]['hyperliquid_coin']
+    rows = []
+    seen = set()
+
     start = _year_start_ms()
     end   = _now_ms()
-    rows  = []
+    chunk_start = start
+    chunk_num = 0
 
-    # Сначала проверяем что рынок существует через meta
-    try:
-        rm = await client.post(HL_URL,
-            json={'type': 'meta', 'dex': dex},
-            timeout=15.0)
-        if rm.status_code == 200:
-            universe = rm.json().get('universe', [])
-            # coin например  'xyz:GOLD', в universe name может быть без префикса
-            names = [u.get('name', '') for u in universe]
-            coin_short = coin.split(':')[-1]  # GOLD
-            found = next((n for n in names if n.upper() == coin.upper() or n.upper() == coin_short.upper()), None)
-            if not found:
-                print(f'Hyperliquid: тикер {coin} не найден в dex={dex}, доступные: {names[:10]}')
-                # Пробуем всё равно с тем что есть
-            else:
-                coin = found  # используем точное название из API
-                print(f'Hyperliquid: тикер найден: {coin}')
-    except Exception as e:
-        print(f'Hyperliquid meta error: {e}')
+    while chunk_start < end:
+        chunk_end = min(chunk_start + HL_CHUNK_MS, end)
+        chunk_num += 1
+        try:
+            r = await client.post(HL_URL,
+                json={
+                    'type': 'fundingHistory',
+                    'coin': coin,
+                    'dex': dex,
+                    'startTime': chunk_start,
+                    'endTime': chunk_end,
+                },
+                timeout=20.0)
+            if r.status_code != 200:
+                print(f'Hyperliquid chunk {chunk_num}: HTTP {r.status_code}')
+                chunk_start = chunk_end + 1
+                continue
+            data = r.json()
+            if not isinstance(data, list):
+                chunk_start = chunk_end + 1
+                continue
+            new_in_chunk = 0
+            for d in data:
+                key = int(d['time'])
+                if key in seen:
+                    continue
+                seen.add(key)
+                new_in_chunk += 1
+                rows.append({
+                    'exchange': 'hyperliquid',
+                    'asset': asset,
+                    'symbol': coin,
+                    'funding_time': key,
+                    'funding_rate': float(d['fundingRate']),
+                    'mark_price': None,
+                    'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
+                })
+            print(f'Hyperliquid {coin} chunk {chunk_num}: +{new_in_chunk}, total: {len(rows)}')
+        except Exception as e:
+            print(f'Hyperliquid {coin} chunk {chunk_num}: {e}')
+        chunk_start = chunk_end + 1
 
-    try:
-        r = await client.post(HL_URL,
-            json={
-                'type': 'fundingHistory',
-                'coin': coin,
-                'dex': dex,
-                'startTime': start,
-                'endTime': end,
-            },
-            timeout=30.0)
-        if r.status_code != 200:
-            print(f'Hyperliquid {coin}: HTTP {r.status_code} {r.text[:300]}')
-            return rows
-        data = r.json()
-        if not isinstance(data, list) or not data:
-            print(f'Hyperliquid {coin}: пустой ответ ({data})')
-            return rows
-        for d in data:
-            rows.append({
-                'exchange': 'hyperliquid',
-                'asset': asset,
-                'symbol': coin,
-                'funding_time': int(d['time']),
-                'funding_rate': float(d['fundingRate']),
-                'mark_price': None,
-                'premium': float(d['premium']) if d.get('premium') not in (None, '') else None,
-            })
-        print(f'Hyperliquid {coin}: OK, {len(rows)} rows')
-    except Exception as e:
-        print(f'Hyperliquid {coin}: {e}')
+    rows.sort(key=lambda x: x['funding_time'])
+    print(f'Hyperliquid {coin}: DONE, {len(rows)} rows total')
     return rows
 
 
 async def collect(asset: str) -> list[dict]:
-    timeout = httpx.Timeout(60.0)
+    timeout = httpx.Timeout(120.0)
     headers = {'User-Agent': 'metals-funding-history/1.0'}
     async with httpx.AsyncClient(timeout=timeout, headers=headers) as c:
         rows = []
