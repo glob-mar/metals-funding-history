@@ -27,11 +27,11 @@
       <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">📊 Доход</a>
     </div>
     <div class="btn-row export-row">
-      <span class="label">↓ CSV:</span>
-      <a class="btn yellow small" href="/api/export/{{ key }}.csv">Все</a>
-      {% if info.okx %}<a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=okx">OKX</a>{% endif %}
-      {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=binance">Binance</a>{% endif %}
-      <a class="btn yellow small" href="/api/export/{{ key }}.csv?exchange=hyperliquid">HL</a>
+      <span class="label">↓ Excel:</span>
+      <a class="btn yellow small" href="/api/export/{{ key }}.xlsx" title="Все биржи: Raw + Annual + Monthly">Все</a>
+      {% if info.okx %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=okx" title="OKX: Raw + Annual + Monthly">OKX</a>{% endif %}
+      {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=binance" title="Binance: Raw + Annual + Monthly">Binance</a>{% endif %}
+      <a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=hyperliquid" title="Hyperliquid: Raw + Annual + Monthly">HL</a>
     </div>
   </div>
   {% endfor %}
