@@ -151,7 +151,7 @@ async def export_csv(asset: str, exchange: Optional[str] = Query(None)):
 async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
     """Excel-выгрузка с тремя листами:
        Raw — сырые данные
-       Annual — годовая доходность по биржам
+       Annual — годовая доходность по биржам (формула: СРЕДНЯЯ × ПЕРИОДОВ в ГОД)
        Monthly — помесячная доходность по биржам
     """
     import openpyxl
@@ -167,12 +167,12 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
             rows = [r for r in rows if r['exchange'] == exchange.lower()]
 
         wb = openpyxl.Workbook()
+        header_fill = PatternFill('solid', fgColor='1F4E79')
+        header_font = Font(color='FFFFFF', bold=True)
 
         # ===== Лист 1: Raw =====
         ws_raw = wb.active
         ws_raw.title = 'Raw'
-        header_fill = PatternFill('solid', fgColor='1F4E79')
-        header_font = Font(color='FFFFFF', bold=True)
         raw_headers = [
             'exchange', 'asset', 'symbol', 'datetime_utc',
             'funding_time_ms', 'funding_rate', 'funding_rate_pct',
@@ -183,30 +183,32 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal='center')
-
         for row in rows:
             fr = row['funding_rate'] if row['funding_rate'] is not None else 0.0
             ws_raw.append([
-                row['exchange'],
-                row['asset'],
-                row['symbol'],
-                ms_to_dt(row['funding_time']),
-                row['funding_time'],
-                round(fr, 10),
-                round(fr * 100, 8),
+                row['exchange'], row['asset'], row['symbol'],
+                ms_to_dt(row['funding_time']), row['funding_time'],
+                round(fr, 10), round(fr * 100, 8),
                 row['mark_price'] if row['mark_price'] is not None else None,
                 round(row['premium'], 10) if row['premium'] is not None else None,
             ])
-
         for col in range(1, len(raw_headers) + 1):
             ws_raw.column_dimensions[get_column_letter(col)].width = 20
 
         # ===== Лист 2: Annual =====
+        # Формула: Годовая = Средняя ставка × Количество периодов в год (APR)
         ws_annual = wb.create_sheet('Annual')
         annual_headers = [
-            'exchange', 'periods', 'date_from', 'date_to',
-            'days_observed', 'avg_rate_pct', 'annualized_yield_pct',
-            'max_rate_pct', 'min_rate_pct', 'pct_positive'
+            'Биржа',
+            'Количество периодов',
+            'Дата начала',
+            'Дата окончания',
+            'Дней наблюдений',
+            'Средняя ставка, %',
+            'Годовая доходность, %',
+            'Макс ставка, %',
+            'Мин ставка, %',
+            '% положительных периодов',
         ]
         for col, h in enumerate(annual_headers, 1):
             cell = ws_annual.cell(row=1, column=col, value=h)
@@ -219,18 +221,18 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
         for r in rows:
             ex = r['exchange']
             fr = r['funding_rate'] if r['funding_rate'] is not None else 0.0
-            ts = r['funding_time']
             by_exchange[ex].append(fr)
-            by_exchange_ts[ex].append(ts)
+            by_exchange_ts[ex].append(r['funding_time'])
 
         for ex, rates in by_exchange.items():
             n = len(rates)
             avg = sum(rates) / n
+            # Правильная формула APR: средняя ставка × периодов в год
+            ppy = PERIODS_PER_YEAR.get(ex, 8760)
+            annual = avg * ppy * 100
             timestamps = by_exchange_ts[ex]
-            ts_min = min(timestamps)
-            ts_max = max(timestamps)
-            days = (ts_max - ts_min) / 86400000  # ms -> days
-            annual = (sum(rates) * 365 / days * 100) if days > 0 else 0.0
+            ts_min, ts_max = min(timestamps), max(timestamps)
+            days = (ts_max - ts_min) / 86400000
             pos = sum(1 for r in rates if r > 0)
             ws_annual.append([
                 ex,
@@ -244,16 +246,18 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
                 round(min(rates) * 100, 6),
                 round(pos / n * 100, 1),
             ])
-
         for col in range(1, len(annual_headers) + 1):
-            ws_annual.column_dimensions[get_column_letter(col)].width = 22
+            ws_annual.column_dimensions[get_column_letter(col)].width = 26
 
         # ===== Лист 3: Monthly =====
         ws_monthly = wb.create_sheet('Monthly')
         monthly_headers = [
-            'exchange', 'month', 'periods',
-            'sum_funding_rate', 'avg_funding_rate_pct',
-            'monthly_yield_pct', 'pct_positive'
+            'Биржа',
+            'Месяц',
+            'Количество периодов',
+            'Средняя ставка за период, %',
+            'Доходность за месяц, %',
+            '% положительных периодов',
         ]
         for col, h in enumerate(monthly_headers, 1):
             cell = ws_monthly.cell(row=1, column=col, value=h)
@@ -261,14 +265,12 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal='center')
 
-        # Группируем по (exchange, year, month)
         monthly_data: dict = defaultdict(list)
         for r in rows:
             ex = r['exchange']
             fr = r['funding_rate'] if r['funding_rate'] is not None else 0.0
             dt = datetime.fromtimestamp(r['funding_time'] / 1000, tz=timezone.utc)
-            key = (ex, dt.year, dt.month)
-            monthly_data[key].append(fr)
+            monthly_data[(ex, dt.year, dt.month)].append(fr)
 
         for (ex, year, month), rates in sorted(monthly_data.items()):
             n = len(rates)
@@ -279,16 +281,13 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
                 ex,
                 f'{year}-{month:02d}',
                 n,
-                round(s * 100, 6),
-                round(avg * 100, 6),
-                round(s * 100, 4),    # суммарный фандинг за месяц (%)
+                round(avg * 100, 6),       # средняя ставка за период
+                round(s * 100, 4),          # сумма всех ставок за месяц = доходность
                 round(pos / n * 100, 1),
             ])
-
         for col in range(1, len(monthly_headers) + 1):
-            ws_monthly.column_dimensions[get_column_letter(col)].width = 22
+            ws_monthly.column_dimensions[get_column_letter(col)].width = 28
 
-        # ===== Выгрузка =====
         buf = BytesIO()
         wb.save(buf)
         buf.seek(0)
