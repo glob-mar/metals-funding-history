@@ -30,23 +30,28 @@ ASSETS = {
     'BRENT': {
         'label': 'Нефть Brent',
         'okx': 'BZ-USDT-SWAP',
-        'binance': 'BZUSDT',          # запущен с апреля 2026
+        'binance': 'BZUSDT',
         'hyperliquid_dex': 'xyz',
         'hyperliquid_coin': 'xyz:BRENTOIL',
     },
     'NATGAS': {
         'label': 'Природный газ',
         'okx': None,
-        'binance': 'NATGASUSDT',      # запущен с апреля 2026
+        'binance': 'NATGASUSDT',
         'hyperliquid_dex': 'xyz',
         'hyperliquid_coin': 'xyz:NATGAS',
+    },
+    'BTC': {
+        'label': 'Bitcoin (BTC)',
+        'okx': 'BTC-USDT-SWAP',
+        'binance': 'BTCUSDT',
+        'hyperliquid_dex': 'HyperEVM',
+        'hyperliquid_coin': 'HyperEVM:BTC',
     },
 }
 
 BINANCE_FAPI = 'https://fapi.binance.com/fapi/v1/fundingRate'
 # Периодов в год по бирже
-# Binance золото/серебро/платина/палладий: каждые 8ч (1095)
-# Binance энергетика: каждые 8ч (1095)
 PERIODS_PER_YEAR = {
     'hyperliquid': 8760,
     'okx':         1095,
