@@ -1,6 +1,7 @@
 const EXCHANGE_LABELS = { okx: 'OKX', binance: 'Binance', hyperliquid: 'Hyperliquid' }
 
-const state = { exchange: 'binance', asset: 'XAU' }
+const state = { exchange: 'binance', asset: 'XAU', priceChartType: 'line' }
+let currentPriceSeries = []
 let fundingChart = null
 let priceChart = null
 let pnlChart = null
@@ -374,12 +375,9 @@ function renderPnlChart() {
   renderPnlSummary()
 }
 
-function priceChartOption(series) {
+function lineChartOption(series, base) {
   const data = series.map(p => [p.ts, p.close])
-  const base = baseAxisStyle()
   return {
-    backgroundColor: 'transparent',
-    animation: false,
     grid: { left: 55, right: 20, top: 20, bottom: 20 },
     tooltip: base.tooltip,
     xAxis: base.xAxis,
@@ -402,9 +400,46 @@ function priceChartOption(series) {
   }
 }
 
+// ECharts candlestick с value/time-осью ждёt данные как [x, open, close, low, high]
+// (именно в этом порядке — open/close раньше low/high, не путать с OHLC).
+function candlestickChartOption(series, base) {
+  const data = series.map(p => [p.ts, p.open, p.close, p.low, p.high])
+  return {
+    grid: { left: 55, right: 20, top: 20, bottom: 20 },
+    tooltip: {
+      ...base.tooltip,
+      formatter: params => {
+        const p = params[0]
+        const [, o, c, l, h] = p.value
+        return `${new Date(p.value[0]).toLocaleString('ru-RU')}<br>` +
+          `Откр: ${o}<br>Закр: ${c}<br>Мин: ${l}<br>Макс: ${h}`
+      },
+    },
+    xAxis: base.xAxis,
+    yAxis: base.yAxis,
+    dataZoom: [{ type: 'inside' }],
+    series: [{
+      type: 'candlestick', data,
+      itemStyle: {
+        color: '#3fb950', color0: '#f85149',
+        borderColor: '#3fb950', borderColor0: '#f85149',
+      },
+    }],
+  }
+}
+
+function priceChartOption(series) {
+  const base = baseAxisStyle()
+  const common = { backgroundColor: 'transparent', animation: false }
+  return state.priceChartType === 'candlestick'
+    ? { ...common, ...candlestickChartOption(series, base) }
+    : { ...common, ...lineChartOption(series, base) }
+}
+
 function renderPriceChart(series) {
   const el = document.getElementById('price-chart')
   const empty = document.getElementById('price-chart-empty')
+  currentPriceSeries = series
   if (!priceChart) priceChart = echarts.init(el, null, { renderer: 'canvas' })
   if (!series.length) {
     // Отключаем от группы синхронизации, пока график скрыт — иначе connect()
@@ -446,6 +481,14 @@ document.querySelectorAll('#a-range-buttons button').forEach(btn => {
     document.querySelectorAll('#a-range-buttons button').forEach(b => b.classList.remove('active'))
     btn.classList.add('active')
     applyRange(btn.dataset.range)
+  })
+})
+document.querySelectorAll('#price-type-buttons button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#price-type-buttons button').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+    state.priceChartType = btn.dataset.type
+    if (currentPriceSeries.length) renderPriceChart(currentPriceSeries)
   })
 })
 document.querySelectorAll('#pnl-side-picker .pill').forEach(btn => {

@@ -208,7 +208,10 @@ async def analysis(exchange: str, asset: str):
 
         price_rows = await get_price_history(asset)
         price_rows_ex = [p for p in price_rows if p['exchange'] == exchange]
-        price_series = [{'ts': p['ts'], 'close': p['close']} for p in price_rows_ex]
+        price_series = [
+            {'ts': p['ts'], 'open': p['open'], 'high': p['high'], 'low': p['low'], 'close': p['close']}
+            for p in price_rows_ex
+        ]
 
         funding_series = [
             {

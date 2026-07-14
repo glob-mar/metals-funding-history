@@ -92,6 +92,10 @@
     <div class="chart-card">
       <div class="chart-card-header">
         <span class="chart-title">Цена актива</span>
+        <div class="range-buttons" id="price-type-buttons">
+          <button data-type="line" class="active">Линия</button>
+          <button data-type="candlestick">Свечи</button>
+        </div>
       </div>
       <div id="price-chart" class="chart-box"></div>
       <div class="chart-empty" id="price-chart-empty" style="display:none">Цена по этой бирже ещё не собрана.</div>
