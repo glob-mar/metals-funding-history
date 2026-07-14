@@ -13,6 +13,9 @@ from .config import ASSETS
 from .db import init_db, upsert_rows, get_history, upsert_price_rows, get_price_history
 from .services import collect, collect_prices
 from .metrics import periods_per_year, interval_label
+from .analysis import exchange_stats, monthly_table
+
+EXCHANGES = ('binance', 'okx', 'hyperliquid')
 
 
 def ms_to_dt(ms: int) -> str:
@@ -68,6 +71,63 @@ async def price_history(asset: str, exchange: Optional[str] = Query(None)):
         if exchange:
             rows = [r for r in rows if r['exchange'] == exchange.lower()]
         return JSONResponse({'ok': True, 'asset': asset, 'count': len(rows), 'rows': rows})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.get('/api/analysis/{exchange}/{asset}')
+async def analysis(exchange: str, asset: str):
+    """Единый эндпоинт для экрана анализа: биржа+актив -> вся сводка одним ответом."""
+    asset = asset.upper()
+    exchange = exchange.lower()
+    if asset not in ASSETS:
+        return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
+    if exchange not in EXCHANGES:
+        return JSONResponse({'ok': False, 'error': 'Неизвестная биржа'}, status_code=404)
+    try:
+        all_rows = await get_history(asset)
+        by_exchange: dict = defaultdict(list)
+        for r in all_rows:
+            by_exchange[r['exchange']].append(r)
+
+        rows = by_exchange.get(exchange, [])
+        if not rows:
+            return JSONResponse({
+                'ok': True, 'exchange': exchange, 'asset': asset,
+                'message': 'Нет данных для этой пары. Нажми «Собрать» сначала.',
+            })
+
+        cross_exchange = {
+            ex: exchange_stats(ex_rows)
+            for ex, ex_rows in by_exchange.items() if ex_rows
+        }
+
+        price_rows = await get_price_history(asset)
+        price_series = [
+            {'ts': p['ts'], 'close': p['close']}
+            for p in price_rows if p['exchange'] == exchange
+        ]
+
+        funding_series = [
+            {
+                'ts': r['funding_time'],
+                'rate_pct': round((r['funding_rate'] if r['funding_rate'] is not None else 0.0) * 100, 6),
+            }
+            for r in rows
+        ]
+
+        return JSONResponse({
+            'ok': True,
+            'exchange': exchange,
+            'asset': asset,
+            'symbol': rows[0]['symbol'],
+            'stats': exchange_stats(rows),
+            'monthly': monthly_table(rows),
+            'cross_exchange': cross_exchange,
+            'funding_series': funding_series,
+            'price_series': price_series,
+        })
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
