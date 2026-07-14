@@ -83,13 +83,17 @@ body { font-family: var(--font-ui); }
 }
 .range-buttons button.active { color: var(--text-primary); border-color: var(--chart-line); background: rgba(88,166,255,.12); }
 
-.pnl-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.pnl-controls { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .6rem; }
 .pnl-notional-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: .4rem; }
 .pnl-notional-label input {
   background: var(--surface-2); border: 1px solid var(--border-default); border-radius: var(--r-ctl);
   color: var(--text-primary); padding: .25rem .5rem; font-size: .82rem; font-family: var(--font-ui); width: 110px;
 }
 .pnl-notional-label input:focus { outline: none; border-color: var(--chart-line); }
+.pnl-checkbox-label {
+  font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: .4rem;
+}
+.pnl-checkbox-label input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--chart-line); }
 #pnl-summary { margin: -.2rem 0 .3rem 0; }
 #pnl-fee-note { font-size: 11px; margin: 0 0 .6rem 0; }
 #pnl-fee-pct { width: 80px; }

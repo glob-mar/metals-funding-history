@@ -49,7 +49,7 @@
 
     <div class="a-hero">
       <div class="a-hero-label">Годовая доходность (APR)
-        <span class="info-tip" data-tip="APR = средняя ставка за период × количество периодов начисления в год × 100%. Количество периодов в год считается по факту данных (медиана интервала между начислениями), а не хардкодом — поэтому может отличаться для одного и того же актива на разных биржах.">ⓘ</span>
+        <span class="info-tip" data-tip="Сколько бы ты заработал(а) за год, если ставка в среднем останется такой же, как сейчас. Берём среднюю ставку за одно начисление и умножаем на то, сколько раз в год она начисляется (это зависит от биржи и актива: где-то раз в час, где-то раз в 4 или 8 часов).">ⓘ</span>
       </div>
       <div class="a-hero-value num" id="a-hero-value">—</div>
       <div class="a-hero-sub" id="a-hero-sub"></div>
@@ -74,25 +74,38 @@
     <div class="chart-card">
       <div class="chart-card-header">
         <span class="chart-title">Симулятор накопленного дохода от фандинга</span>
-        <div class="pnl-controls">
-          <div class="pill-row" id="pnl-side-picker">
-            <button class="pill asset active" data-side="short">Шорт</button>
-            <button class="pill asset" data-side="long">Лонг</button>
-          </div>
-          <label class="pnl-notional-label">Ноционал, $
-            <input type="number" id="pnl-notional" value="10000" min="1" step="1000">
-          </label>
-          <div class="pill-row" id="pnl-fee-picker">
-            <button class="pill asset" data-fee="maker">Мейкер</button>
-            <button class="pill asset active" data-fee="taker">Тейкер</button>
-          </div>
-          <label class="pnl-notional-label">Комиссия за сделку, %
-            <input type="number" id="pnl-fee-pct" value="0.05" min="0" step="0.001">
-          </label>
+      </div>
+      <div class="pnl-controls">
+        <div class="pill-row" id="pnl-side-picker">
+          <button class="pill asset active" data-side="short">Шорт</button>
+          <button class="pill asset" data-side="long">Лонг</button>
         </div>
+        <label class="pnl-notional-label">Депозит, $
+          <input type="number" id="pnl-deposit" value="10000" min="1" step="1000">
+        </label>
+        <label class="pnl-notional-label">Плечо, ×
+          <input type="number" id="pnl-leverage" value="1" min="0.1" step="0.5">
+        </label>
+        <label class="pnl-checkbox-label">
+          <input type="checkbox" id="pnl-two-legs" checked>
+          2 ноги (капитал пополам)
+          <span class="info-tip" data-tip="Для фандинг-арбитража: одна нога у тебя на этой бирже, вторая (хедж от движения цены) — на форексе или другой площадке. Раз капитал нужен на обе ноги, ноционал, который реально зарабатывает фандинг, — только половина депозита. Плечо применяется уже к этой половине.">ⓘ</span>
+        </label>
+      </div>
+      <div class="pnl-controls">
+        <div class="pill-row" id="pnl-fee-picker">
+          <button class="pill asset" data-fee="maker">Мейкер</button>
+          <button class="pill asset active" data-fee="taker">Тейкер</button>
+        </div>
+        <label class="pnl-notional-label">Комиссия за сделку, %
+          <input type="number" id="pnl-fee-pct" value="0.05" min="0" step="0.001">
+        </label>
+        <label class="pnl-notional-label">Реинвест прибыли, %
+          <input type="number" id="pnl-reinvest-pct" value="0" min="0" max="100" step="5">
+        </label>
       </div>
       <div class="a-hero-sub" id="pnl-summary"></div>
-      <div class="a-hero-sub" id="pnl-fee-note">Комиссия считается round-trip (вход + выход), ставки по умолчанию — ориентировочные для обычного тарифа биржи, могут отличаться от факта.</div>
+      <div class="a-hero-sub" id="pnl-fee-note">Комиссия считается round-trip (вход + выход) от стартового ноционала, ставки по умолчанию — ориентировочные для обычного тарифа биржи. Реинвест 0% — обычный (линейный) расчёт, выше 0% — часть прибыли каждого периода добавляется к капиталу и дальше тоже работает (сложный процент).</div>
       <div id="pnl-chart" class="chart-box"></div>
     </div>
 
@@ -160,12 +173,7 @@
 
       <div class="card asset-form-card" style="margin-top:1.5rem;max-width:640px">
         <h2>➕ Добавить актив</h2>
-        <p class="subtitle">Задай ключ и название, потом добавляй тикеры по одной бирже за раз из выпадающих списков — жми «+ Добавить тикер» столько раз, сколько бирж нужно, и в конце «Сохранить».</p>
-
-        <div class="asset-form">
-          <label>Ключ актива (напр. SOL)<input type="text" id="af-key"></label>
-          <label>Название<input type="text" id="af-label"></label>
-        </div>
+        <p class="subtitle">Выбери биржу и инструмент из списка и жми «+ Добавить тикер» — название актива подставится само. Повтори для остальных бирж, где он есть, и нажми «Сохранить».</p>
 
         <div class="ticker-picker">
           <label>Биржа
@@ -176,8 +184,7 @@
             </select>
           </label>
           <label id="af-hl-dex-wrap" style="display:none">Dex
-            <input type="text" id="af-hl-dex" list="af-hl-dex-list" placeholder="начни вводить...">
-            <datalist id="af-hl-dex-list"></datalist>
+            <select id="af-hl-dex"></select>
           </label>
           <label>Инструмент
             <input type="text" id="af-instrument" list="af-instrument-list" placeholder="начни вводить тикер...">
@@ -186,6 +193,7 @@
           <button type="button" class="btn blue" id="af-add-ticker-btn">+ Добавить тикер</button>
         </div>
 
+        <p id="af-derived-key" class="status">Актив появится здесь после первого добавленного тикера.</p>
         <div id="af-ticker-chips" class="ticker-chips"></div>
 
         <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>

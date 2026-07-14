@@ -8,7 +8,10 @@ let pnlChart = null
 let liveData = null
 let lastLiveAsset = null
 let currentFundingSeries = []
-const pnlState = { notional: 10000, side: 'short', feeType: 'taker', feePct: 0.05 }
+const pnlState = {
+  deposit: 10000, leverage: 1, twoLegs: true, reinvestPct: 0,
+  side: 'short', feeType: 'taker', feePct: 0.05,
+}
 // Ориентировочные ставки round-trip комиссии по обычному (не VIP) тарифу —
 // могут отличаться от факта и меняться биржами со временем, поэтому дают
 // только стартовую точку, поле «Комиссия за сделку» всегда редактируемо.
@@ -183,7 +186,7 @@ function renderHero(stats) {
     `Средняя ставка за период: ${fmtPct(stats.avg_rate_pct, 6)} · ${stats.periods} периодов · ${stats.date_start.slice(0, 10)} → ${stats.date_end.slice(0, 10)}`
 }
 
-const CORRELATION_TIP = 'Коэффициент корреляции Пирсона между дневной средней ставкой фандинга и дневной средней ценой актива. От −1 до +1: ближе к +1 — ставка и цена растут/падают вместе; ближе к −1 — двигаются в противоположные стороны; около 0 — связи не видно. Нужно минимум 3 общих дня по обоим рядам, иначе «н/д».'
+const CORRELATION_TIP = 'Показывает, связаны ли между собой ставка фандинга и цена актива. Число от −1 до +1: ближе к +1 — когда цена растёт, ставка тоже растёт (и наоборот); ближе к −1 — двигаются в разные стороны; около 0 — зависимости нет. Если данных мало (меньше 3 общих дней), показываем «н/д».'
 
 function renderStatStrip(stats) {
   const corr = stats.correlation_price
@@ -319,17 +322,38 @@ function renderFundingChart(series) {
 // Конвенция знака funding rate — стандартная для перпетуалов на всех трёх
 // биржах: положительная ставка = лонги платят шортам. Поэтому шорт получает
 // +notional*rate за период, лонг — ровно наоборот.
-function computeCumulativePnl(series, notional, side) {
+//
+// «2 ноги» — реальный сетап пользователя: фандинг-арбитраж, вторая
+// (хеджирующая) нога стоит на форексе вне этого дашборда. Депозит делится
+// пополам между ногами, поэтому ноционал, реально зарабатывающий фандинг,
+// вдвое меньше депозита. Плечо умножает этот ноционал дальше.
+//
+// Реинвест — простое сложное начисление: доля reinvestPct% прибыли/убытка
+// каждого периода добавляется обратно к капиталу (и дальше сама участвует
+// в расчёте ноционала следующих периодов), остальное откладывается «в
+// кэш» без начисления процента на процент. reinvestPct=0 — старое линейное
+// поведение (капитал не меняется, это и есть режим по умолчанию).
+function computeSimulation(series, { deposit, leverage, twoLegs, reinvestPct, side }) {
   const sign = side === 'short' ? 1 : -1
-  let cum = 0
+  const legFactor = twoLegs ? 0.5 : 1
+  let capital = deposit
+  let cashOut = 0
   return series.map(p => {
-    cum += sign * notional * (p.rate_pct / 100)
-    return [p.ts, cum]
+    const notional = capital * legFactor * leverage
+    const periodPnl = sign * notional * (p.rate_pct / 100)
+    const reinvested = periodPnl * (reinvestPct / 100)
+    capital += reinvested
+    cashOut += periodPnl - reinvested
+    return [p.ts, capital + cashOut - deposit]
   })
 }
 
+function startingNotional() {
+  return pnlState.deposit * (pnlState.twoLegs ? 0.5 : 1) * pnlState.leverage
+}
+
 function pnlChartOption(series) {
-  const data = computeCumulativePnl(series, pnlState.notional, pnlState.side)
+  const data = computeSimulation(series, pnlState)
   const base = baseAxisStyle()
   const values = data.map(d => d[1])
   const dataMax = Math.max(...values, 0)
@@ -375,13 +399,17 @@ function fmtMoney(v) {
 function renderPnlSummary() {
   const el = document.getElementById('pnl-summary')
   if (!currentFundingSeries.length) { el.textContent = ''; return }
-  const data = computeCumulativePnl(currentFundingSeries, pnlState.notional, pnlState.side)
+  const data = computeSimulation(currentFundingSeries, pnlState)
   const gross = data[data.length - 1][1]
-  const feeCost = pnlState.notional * (pnlState.feePct / 100) * 2
+  const notional = startingNotional()
+  const feeCost = notional * (pnlState.feePct / 100) * 2
   const net = gross - feeCost
   const sideLabel = pnlState.side === 'short' ? 'шорте' : 'лонге'
-  el.innerHTML = `При ${sideLabel} на $${pnlState.notional.toLocaleString('ru-RU')} за всю историю: ` +
-    `фандинг <b class="num ${signClass(gross)}">${fmtMoney(gross)}</b> · ` +
+  const legsNote = pnlState.twoLegs ? ', 2 ноги (÷2)' : ''
+  const reinvestNote = pnlState.reinvestPct > 0 ? ` · реинвест ${pnlState.reinvestPct}%` : ''
+  el.innerHTML = `Депозит $${pnlState.deposit.toLocaleString('ru-RU')}, плечо ${pnlState.leverage}×${legsNote} ` +
+    `→ стартовый ноционал $${notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} на ${sideLabel}${reinvestNote}<br>` +
+    `За всю историю: фандинг <b class="num ${signClass(gross)}">${fmtMoney(gross)}</b> · ` +
     `комиссия вход+выход <b class="num neg">−$${feeCost.toFixed(2)}</b> · ` +
     `чистыми <b class="num ${signClass(net)}">${fmtMoney(net)}</b>`
 }
@@ -521,10 +549,26 @@ document.querySelectorAll('#pnl-side-picker .pill').forEach(btn => {
     renderPnlChart()
   })
 })
-document.getElementById('pnl-notional').addEventListener('input', (e) => {
+document.getElementById('pnl-deposit').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value)
   if (!isFinite(v) || v <= 0) return
-  pnlState.notional = v
+  pnlState.deposit = v
+  renderPnlChart()
+})
+document.getElementById('pnl-leverage').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v <= 0) return
+  pnlState.leverage = v
+  renderPnlChart()
+})
+document.getElementById('pnl-two-legs').addEventListener('change', (e) => {
+  pnlState.twoLegs = e.target.checked
+  renderPnlChart()
+})
+document.getElementById('pnl-reinvest-pct').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v < 0 || v > 100) return
+  pnlState.reinvestPct = v
   renderPnlChart()
 })
 document.querySelectorAll('#pnl-fee-picker .pill').forEach(btn => {

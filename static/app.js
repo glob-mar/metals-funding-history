@@ -116,6 +116,19 @@ function fillDatalist(datalistEl, items) {
 
 const assetDraft = { okx: null, binance: null, hyperliquid_dex: null, hyperliquid_coin: null }
 
+// Ключ и название актива больше не вводятся руками — выводятся из первого
+// добавленного тикера (пользователь путался, зачем вообще эти два поля,
+// когда всё уже понятно из выбранной биржи и инструмента).
+function deriveDraftKey() {
+  if (assetDraft.okx) return assetDraft.okx.replace(/-USDT-SWAP$/, '')
+  if (assetDraft.binance) return assetDraft.binance.replace(/USDT$/, '')
+  if (assetDraft.hyperliquid_coin) {
+    const i = assetDraft.hyperliquid_coin.indexOf(':')
+    return i >= 0 ? assetDraft.hyperliquid_coin.slice(i + 1) : assetDraft.hyperliquid_coin
+  }
+  return null
+}
+
 function renderTickerChips() {
   const el = document.getElementById('af-ticker-chips')
   if (!el) return
@@ -126,6 +139,13 @@ function renderTickerChips() {
     label: 'Hyperliquid', value: assetDraft.hyperliquid_coin,
     clear: () => { assetDraft.hyperliquid_dex = null; assetDraft.hyperliquid_coin = null },
   })
+
+  const keyEl = document.getElementById('af-derived-key')
+  if (keyEl) {
+    const key = deriveDraftKey()
+    keyEl.textContent = key ? `Актив: ${key}` : 'Актив появится здесь после первого добавленного тикера.'
+  }
+
   if (!chips.length) {
     el.innerHTML = '<span class="ticker-chip-empty">Пока не добавлено ни одного тикера</span>'
     return
@@ -146,21 +166,32 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!exchangeSelect) return
 
   const hlDexWrap = document.getElementById('af-hl-dex-wrap')
-  const hlDexInput = document.getElementById('af-hl-dex')
-  const hlDexDatalist = document.getElementById('af-hl-dex-list')
+  const hlDexSelect = document.getElementById('af-hl-dex')
   const instrumentInput = document.getElementById('af-instrument')
   const instrumentDatalist = document.getElementById('af-instrument-list')
 
+  async function onHlDexChange() {
+    instrumentInput.disabled = false
+    instrumentInput.value = ''
+    instrumentInput.placeholder = 'начни вводить монету...'
+    const coins = await loadHlCoins(hlDexSelect.value)
+    fillDatalist(instrumentDatalist, coins)
+  }
+  hlDexSelect.addEventListener('change', onHlDexChange)
+
   async function onExchangeChange() {
     instrumentInput.value = ''
-    hlDexInput.value = ''
     if (exchangeSelect.value === 'hyperliquid') {
       hlDexWrap.style.display = ''
       instrumentInput.disabled = true
       instrumentInput.placeholder = 'сначала выбери dex'
       fillDatalist(instrumentDatalist, [])
       const dexes = await loadHlDexes()
-      hlDexDatalist.innerHTML = dexes.map(d => `<option value="${d.value}">${d.label}</option>`).join('')
+      hlDexSelect.innerHTML = dexes.map(d => `<option value="${d.value}">${d.label}</option>`).join('')
+      // Dex по умолчанию (нативный) сразу подгружает список монет — не
+      // заставляем пользователя ещё и явно трогать это поле, если ему
+      // нужен именно нативный dex (самый частый случай, напр. ETH/BTC).
+      await onHlDexChange()
     } else {
       hlDexWrap.style.display = 'none'
       instrumentInput.disabled = false
@@ -171,25 +202,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   exchangeSelect.addEventListener('change', onExchangeChange)
 
-  hlDexInput.addEventListener('input', async () => {
-    const dexes = await loadHlDexes()
-    const match = dexes.find(d => d.value === hlDexInput.value)
-    if (!match) return
-    instrumentInput.disabled = false
-    instrumentInput.value = ''
-    instrumentInput.placeholder = 'начни вводить монету...'
-    const coins = await loadHlCoins(match.value)
-    fillDatalist(instrumentDatalist, coins)
-  })
-
   document.getElementById('af-add-ticker-btn').addEventListener('click', () => {
     const ex = exchangeSelect.value
     const value = instrumentInput.value.trim()
     if (!value) { alert('Выбери инструмент из списка'); return }
     if (ex === 'hyperliquid') {
-      const dex = hlDexInput.value.trim()
-      if (!dex) { alert('Сначала выбери dex'); return }
-      assetDraft.hyperliquid_dex = dex
+      assetDraft.hyperliquid_dex = hlDexSelect.value
       assetDraft.hyperliquid_coin = value
     } else {
       assetDraft[ex] = value
@@ -200,17 +218,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('af-save-btn').addEventListener('click', async () => {
     const statusEl = document.getElementById('asset-form-status')
-    const key = document.getElementById('af-key').value.trim()
-    const label = document.getElementById('af-label').value.trim()
-    if (!key || !label) {
-      statusEl.textContent = '❌ Заполни ключ и название актива'
-      return
-    }
-    if (!assetDraft.okx && !assetDraft.binance && !assetDraft.hyperliquid_coin) {
+    const key = deriveDraftKey()
+    if (!key) {
       statusEl.textContent = '❌ Добавь хотя бы один тикер (кнопка «+ Добавить тикер»)'
       return
     }
-    const payload = { key, label, ...assetDraft }
+    const payload = { key, label: key, ...assetDraft }
     statusEl.textContent = '⏳ Проверяю тикеры на биржах...'
     try {
       const r = await fetch('/api/assets', {
