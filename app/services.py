@@ -381,6 +381,59 @@ async def _live_hyperliquid(client: httpx.AsyncClient, asset: str) -> dict | Non
     }
 
 
+async def validate_okx_ticker(client: httpx.AsyncClient, inst: str) -> bool:
+    try:
+        r = await client.get(OKX_FUNDING_RATE_URL, params={'instId': inst}, timeout=10.0)
+        data = r.json().get('data') or []
+        return bool(data)
+    except Exception:
+        return False
+
+
+async def validate_binance_ticker(client: httpx.AsyncClient, symbol: str) -> bool:
+    try:
+        r = await client.get(BINANCE_PREMIUM_INDEX, params={'symbol': symbol}, timeout=10.0)
+        if r.status_code != 200:
+            return False
+        d = r.json()
+        return isinstance(d, dict) and 'markPrice' in d
+    except Exception:
+        return False
+
+
+async def validate_hyperliquid_ticker(client: httpx.AsyncClient, dex: str, coin: str) -> bool:
+    try:
+        payload = {'type': 'metaAndAssetCtxs'}
+        if dex and dex != 'HyperEVM':
+            payload['dex'] = dex
+        r = await client.post(HL_URL, json=payload, timeout=10.0)
+        data = r.json()
+        if not isinstance(data, list):
+            return False
+        names = [u['name'] for u in data[0]['universe']]
+        return coin in names
+    except Exception:
+        return False
+
+
+async def validate_asset_tickers(okx: str | None, binance: str | None,
+                                  hyperliquid_dex: str | None, hyperliquid_coin: str | None) -> dict:
+    """Пробный запрос к каждой указанной бирже перед сохранением нового актива.
+    Поле считается валидным, если тикер не заполнен (актив не обязан быть на
+    всех трёх биржах) — ошибкой считается только заполненный, но нерабочий тикер."""
+    result = {'okx': True, 'binance': True, 'hyperliquid': True}
+    timeout = httpx.Timeout(15.0)
+    headers = {'User-Agent': 'metals-funding-history/1.0'}
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as c:
+        if okx:
+            result['okx'] = await validate_okx_ticker(c, okx)
+        if binance:
+            result['binance'] = await validate_binance_ticker(c, binance)
+        if hyperliquid_coin:
+            result['hyperliquid'] = await validate_hyperliquid_ticker(c, hyperliquid_dex or '', hyperliquid_coin)
+    return result
+
+
 async def collect_live(asset: str) -> dict:
     """Живой снэпшот predicted funding + basis по всем трём биржам (не история)."""
     timeout = httpx.Timeout(20.0)

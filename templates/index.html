@@ -38,8 +38,26 @@
       {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=binance" title="Binance: Raw + Annual + Monthly">Binance</a>{% endif %}
       <a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=hyperliquid" title="Hyperliquid: Raw + Annual + Monthly">HL</a>
     </div>
+    <div class="btn-row">
+      <button class="btn red small" onclick="deleteAsset('{{ key }}')">🗑 Удалить актив</button>
+    </div>
   </div>
   {% endfor %}
+  </div>
+
+  <div class="card asset-form-card" style="margin-top:1.5rem;max-width:520px">
+    <h2>➕ Добавить актив</h2>
+    <p class="subtitle">Заполни тикеры хотя бы для одной биржи — перед сохранением каждый тикер проверяется пробным запросом к бирже.</p>
+    <form id="asset-form" class="asset-form">
+      <label>Ключ актива (напр. SOL)<input type="text" id="af-key" required></label>
+      <label>Название<input type="text" id="af-label" required></label>
+      <label>OKX instId (напр. SOL-USDT-SWAP)<input type="text" id="af-okx"></label>
+      <label>Binance symbol (напр. SOLUSDT)<input type="text" id="af-binance"></label>
+      <label>Hyperliquid dex (напр. xyz или HyperEVM)<input type="text" id="af-hl-dex"></label>
+      <label>Hyperliquid coin (для dex=xyz — напр. xyz:SOL; для нативного dex, напр. HyperEVM, — голое имя без префикса, напр. SOL)<input type="text" id="af-hl-coin"></label>
+      <button type="submit" class="btn green">Проверить и добавить</button>
+    </form>
+    <p id="asset-form-status" class="status"></p>
   </div>
 
   <div id="viewer" style="display:none;margin-top:2rem">

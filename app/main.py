@@ -10,9 +10,12 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from .config import ASSETS
-from .db import init_db, upsert_rows, get_history, upsert_price_rows, get_price_history
-from .services import collect, collect_prices, collect_live
+from .config import ASSETS, DEFAULT_ASSETS, load_assets_into
+from .db import (
+    init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
+    seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
+)
+from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from .metrics import periods_per_year, interval_label
 from .analysis import exchange_stats, monthly_table, funding_price_correlation, hourly_heatmap
 
@@ -23,9 +26,16 @@ def ms_to_dt(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
+async def refresh_assets_cache() -> None:
+    rows = await get_all_assets()
+    load_assets_into(ASSETS, rows)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await seed_assets_if_empty(DEFAULT_ASSETS)
+    await refresh_assets_cache()
     yield
 
 
@@ -48,6 +58,61 @@ async def analysis_page(request: Request):
         'analysis.html',
         {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json}
     )
+
+
+@app.get('/api/assets')
+async def list_assets():
+    return JSONResponse({'ok': True, 'assets': ASSETS})
+
+
+@app.post('/api/assets')
+async def add_asset(request: Request):
+    body = await request.json()
+    key = (body.get('key') or '').strip().upper()
+    label = (body.get('label') or '').strip()
+    okx = (body.get('okx') or '').strip() or None
+    binance = (body.get('binance') or '').strip() or None
+    hyperliquid_dex = (body.get('hyperliquid_dex') or '').strip() or None
+    hyperliquid_coin = (body.get('hyperliquid_coin') or '').strip() or None
+
+    if not key or not key.replace('_', '').isalnum():
+        return JSONResponse({'ok': False, 'error': 'Тикер актива обязателен и должен быть буквенно-цифровым'}, status_code=400)
+    if not label:
+        return JSONResponse({'ok': False, 'error': 'Название актива обязательно'}, status_code=400)
+    if key in ASSETS:
+        return JSONResponse({'ok': False, 'error': f'Актив {key} уже существует'}, status_code=409)
+    if not any([okx, binance, hyperliquid_coin]):
+        return JSONResponse({'ok': False, 'error': 'Нужен хотя бы один тикер (OKX, Binance или Hyperliquid)'}, status_code=400)
+    if hyperliquid_coin and not hyperliquid_dex:
+        return JSONResponse({'ok': False, 'error': 'Для Hyperliquid нужно указать dex (напр. "xyz" или "HyperEVM")'}, status_code=400)
+
+    try:
+        checks = await validate_asset_tickers(okx, binance, hyperliquid_dex, hyperliquid_coin)
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': f'Ошибка проверки тикеров: {e}'}, status_code=502)
+
+    failed = [ex for ex, ok in checks.items() if not ok]
+    if failed:
+        return JSONResponse({
+            'ok': False,
+            'error': f'Тикер не подтверждён биржей: {", ".join(failed)}',
+            'checks': checks,
+        }, status_code=422)
+
+    await insert_asset(key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+    await refresh_assets_cache()
+    return JSONResponse({'ok': True, 'asset': key, 'checks': checks})
+
+
+@app.delete('/api/assets/{key}')
+async def remove_asset(key: str):
+    key = key.upper()
+    if key not in ASSETS:
+        return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
+    await delete_asset(key)
+    await refresh_assets_cache()
+    return JSONResponse({'ok': True, 'asset': key})
 
 
 @app.post('/api/sync/{asset}')

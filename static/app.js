@@ -1,3 +1,52 @@
+async function deleteAsset(asset) {
+  if (!confirm(`Удалить актив ${asset}? Собранная история в БД останется, но пропадёт из списка.`)) return
+  try {
+    const r = await fetch('/api/assets/' + asset, { method: 'DELETE' })
+    const data = await r.json()
+    if (!data.ok) {
+      alert('Ошибка: ' + (data.error || 'неизвестная ошибка'))
+      return
+    }
+    location.reload()
+  } catch (e) {
+    alert('Ошибка сети: ' + e.message)
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('asset-form')
+  if (!form) return
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const statusEl = document.getElementById('asset-form-status')
+    const payload = {
+      key: document.getElementById('af-key').value,
+      label: document.getElementById('af-label').value,
+      okx: document.getElementById('af-okx').value,
+      binance: document.getElementById('af-binance').value,
+      hyperliquid_dex: document.getElementById('af-hl-dex').value,
+      hyperliquid_coin: document.getElementById('af-hl-coin').value,
+    }
+    statusEl.textContent = '⏳ Проверяю тикеры на биржах...'
+    try {
+      const r = await fetch('/api/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await r.json()
+      if (!data.ok) {
+        statusEl.textContent = '❌ ' + (data.error || 'неизвестная ошибка')
+        return
+      }
+      statusEl.textContent = `✅ Актив ${data.asset} добавлен, перезагружаю страницу...`
+      setTimeout(() => location.reload(), 700)
+    } catch (e) {
+      statusEl.textContent = '❌ Ошибка сети: ' + e.message
+    }
+  })
+})
+
 async function syncAsset(asset) {
   const el = document.getElementById('status-' + asset)
   el.textContent = '⏳ Собираю фандинг и цены с бирж... это может занять 20-40 секунд'

@@ -49,7 +49,18 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 .btn.yellow:hover { background: #d29922; }
 .btn.grey { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
 .btn.grey:hover { color: #e6edf3; }
+.btn.red { background: #21262d; color: #f85149; border: 1px solid #da363144; }
+.btn.red:hover { background: #da363122; }
 .btn.small { padding: .3rem .6rem; font-size: .78rem; }
+
+.asset-form { display: flex; flex-direction: column; gap: .7rem; margin-top: .8rem; }
+.asset-form label { display: flex; flex-direction: column; gap: .3rem; font-size: .8rem; color: #8b949e; }
+.asset-form input {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #e6edf3; padding: .5rem .6rem; font-size: .85rem; font-family: inherit;
+}
+.asset-form input:focus { outline: none; border-color: #388bfd; }
+.asset-form button { align-self: flex-start; margin-top: .3rem; }
 table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: .5rem; }
 th { background: #161b22; color: #8b949e; padding: .5rem .7rem; text-align: left; border-bottom: 1px solid #30363d; white-space: nowrap; }
 td { padding: .4rem .7rem; border-bottom: 1px solid #21262d; }

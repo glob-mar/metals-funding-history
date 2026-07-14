@@ -40,6 +40,16 @@ CREATE TABLE IF NOT EXISTS price_history (
 );
 CREATE INDEX IF NOT EXISTS idx_price_asset_time
     ON price_history(asset, ts);
+
+CREATE TABLE IF NOT EXISTS assets (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    key              TEXT    NOT NULL UNIQUE,
+    label            TEXT    NOT NULL,
+    okx              TEXT,
+    binance          TEXT,
+    hyperliquid_dex  TEXT,
+    hyperliquid_coin TEXT
+);
 """
 
 
@@ -49,6 +59,61 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
+
+
+async def seed_assets_if_empty(defaults: dict) -> None:
+    """Заполняет таблицу assets дефолтным списком из config.py, только если
+    она ещё пустая (первый запуск на новой БД/новом volume)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('SELECT COUNT(*) FROM assets')
+        (count,) = await cur.fetchone()
+        if count > 0:
+            return
+        await db.executemany(
+            """
+            INSERT INTO assets (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (key, info['label'], info.get('okx'), info.get('binance'),
+                 info.get('hyperliquid_dex'), info.get('hyperliquid_coin'))
+                for key, info in defaults.items()
+            ]
+        )
+        await db.commit()
+
+
+async def get_all_assets() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT key, label, okx, binance, hyperliquid_dex, hyperliquid_coin
+            FROM assets ORDER BY id ASC
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def insert_asset(key: str, label: str, okx: str | None, binance: str | None,
+                        hyperliquid_dex: str | None, hyperliquid_coin: str | None) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO assets (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+        )
+        await db.commit()
+
+
+async def delete_asset(key: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('DELETE FROM assets WHERE key = ?', (key,))
+        await db.commit()
+        return db.total_changes
 
 
 async def upsert_rows(rows: list[dict]) -> int:
