@@ -8,7 +8,21 @@ let pnlChart = null
 let liveData = null
 let lastLiveAsset = null
 let currentFundingSeries = []
-const pnlState = { notional: 10000, side: 'short' }
+const pnlState = { notional: 10000, side: 'short', feeType: 'taker', feePct: 0.05 }
+// Ориентировочные ставки round-trip комиссии по обычному (не VIP) тарифу —
+// могут отличаться от факта и меняться биржами со временем, поэтому дают
+// только стартовую точку, поле «Комиссия за сделку» всегда редактируемо.
+const DEFAULT_FEES_PCT = {
+  binance:     { maker: 0.02, taker: 0.05 },
+  okx:         { maker: 0.02, taker: 0.05 },
+  hyperliquid: { maker: 0.01, taker: 0.035 },
+}
+
+function syncFeePreset() {
+  if (pnlState.feeType === 'custom') return
+  pnlState.feePct = DEFAULT_FEES_PCT[state.exchange][pnlState.feeType]
+  document.getElementById('pnl-fee-pct').value = pnlState.feePct
+}
 
 function fmtPct(v, digits = 2) {
   if (v === null || v === undefined) return '—'
@@ -141,6 +155,7 @@ function render(data) {
   renderMonthlyTable(data.monthly)
   renderFundingChart(data.funding_series)
   currentFundingSeries = data.funding_series
+  syncFeePreset()
   renderPnlChart()
   renderPriceChart(data.price_series)
 
@@ -352,15 +367,23 @@ function pnlChartOption(series) {
   }
 }
 
+function fmtMoney(v) {
+  const sign = v >= 0 ? '+' : '−'
+  return `${sign}$${Math.abs(v).toFixed(2)}`
+}
+
 function renderPnlSummary() {
   const el = document.getElementById('pnl-summary')
   if (!currentFundingSeries.length) { el.textContent = ''; return }
   const data = computeCumulativePnl(currentFundingSeries, pnlState.notional, pnlState.side)
-  const total = data[data.length - 1][1]
+  const gross = data[data.length - 1][1]
+  const feeCost = pnlState.notional * (pnlState.feePct / 100) * 2
+  const net = gross - feeCost
   const sideLabel = pnlState.side === 'short' ? 'шорте' : 'лонге'
-  const sign = total >= 0 ? '+' : '−'
   el.innerHTML = `При ${sideLabel} на $${pnlState.notional.toLocaleString('ru-RU')} за всю историю: ` +
-    `<b class="num ${signClass(total)}">${sign}$${Math.abs(total).toFixed(2)}</b>`
+    `фандинг <b class="num ${signClass(gross)}">${fmtMoney(gross)}</b> · ` +
+    `комиссия вход+выход <b class="num neg">−$${feeCost.toFixed(2)}</b> · ` +
+    `чистыми <b class="num ${signClass(net)}">${fmtMoney(net)}</b>`
 }
 
 function renderPnlChart() {
@@ -502,6 +525,22 @@ document.getElementById('pnl-notional').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value)
   if (!isFinite(v) || v <= 0) return
   pnlState.notional = v
+  renderPnlChart()
+})
+document.querySelectorAll('#pnl-fee-picker .pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    pnlState.feeType = btn.dataset.fee
+    document.querySelectorAll('#pnl-fee-picker .pill').forEach(b => b.classList.toggle('active', b === btn))
+    syncFeePreset()
+    renderPnlChart()
+  })
+})
+document.getElementById('pnl-fee-pct').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v < 0) return
+  pnlState.feePct = v
+  pnlState.feeType = 'custom'
+  document.querySelectorAll('#pnl-fee-picker .pill').forEach(b => b.classList.remove('active'))
   renderPnlChart()
 })
 window.addEventListener('resize', () => {

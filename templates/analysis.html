@@ -83,9 +83,17 @@
           <label class="pnl-notional-label">Ноционал, $
             <input type="number" id="pnl-notional" value="10000" min="1" step="1000">
           </label>
+          <div class="pill-row" id="pnl-fee-picker">
+            <button class="pill asset" data-fee="maker">Мейкер</button>
+            <button class="pill asset active" data-fee="taker">Тейкер</button>
+          </div>
+          <label class="pnl-notional-label">Комиссия за сделку, %
+            <input type="number" id="pnl-fee-pct" value="0.05" min="0" step="0.001">
+          </label>
         </div>
       </div>
       <div class="a-hero-sub" id="pnl-summary"></div>
+      <div class="a-hero-sub" id="pnl-fee-note">Комиссия считается round-trip (вход + выход), ставки по умолчанию — ориентировочные для обычного тарифа биржи, могут отличаться от факта.</div>
       <div id="pnl-chart" class="chart-box"></div>
     </div>
 
