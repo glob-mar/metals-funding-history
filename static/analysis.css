@@ -100,11 +100,13 @@ body { font-family: var(--font-ui); }
 .pnl-monthly-table td { padding: .4rem .6rem; border-bottom: 1px solid var(--border-muted); }
 .pnl-monthly-table tr.pnl-monthly-total td { font-weight: 700; border-top: 1px solid var(--border-default); border-bottom: none; }
 .pnl-notional-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: .4rem; }
-.pnl-notional-label input {
+.pnl-notional-label input, .pnl-notional-label select {
   background: var(--surface-2); border: 1px solid var(--border-default); border-radius: var(--r-ctl);
   color: var(--text-primary); padding: .25rem .5rem; font-size: .82rem; font-family: var(--font-ui); width: 110px;
 }
-.pnl-notional-label input:focus { outline: none; border-color: var(--chart-line); }
+.pnl-notional-label select { width: auto; }
+.pnl-notional-label input:focus, .pnl-notional-label select:focus { outline: none; border-color: var(--chart-line); }
+#screener-start-date, #screener-end-date { width: 140px; }
 .pnl-checkbox-label {
   font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: .4rem;
 }

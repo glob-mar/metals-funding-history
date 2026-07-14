@@ -147,16 +147,77 @@
 
     <div class="chart-card">
       <div class="chart-card-header">
-        <span class="chart-title">Сравнение активов — что было выгоднее держать</span>
+        <span class="chart-title">Сравнение — что было выгоднее держать</span>
       </div>
-      <p class="subtitle" style="margin-bottom:.6rem">
-        Биржа и параметры сделки (депозит, плечо, комиссия, реинвест, дата начала) берутся из симулятора выше — выбери активы для сравнения и жми «Сравнить».
-      </p>
+      <p class="subtitle" style="margin-bottom:.6rem">Свои параметры сделки — не связаны с симулятором выше.</p>
+
+      <div class="pnl-controls">
+        <div class="pill-row" id="screener-mode-picker">
+          <button class="pill asset active" data-mode="assets">Одна биржа — разные активы</button>
+          <button class="pill asset" data-mode="exchanges">Один актив — разные биржи</button>
+        </div>
+      </div>
+      <div class="pnl-controls">
+        <div class="pill-row" id="screener-side-picker">
+          <button class="pill asset active" data-side="short">Шорт</button>
+          <button class="pill asset" data-side="long">Лонг</button>
+        </div>
+        <label class="pnl-notional-label">Депозит, $
+          <input type="number" id="screener-deposit" value="10000" min="1" step="1000">
+        </label>
+        <label class="pnl-notional-label">Плечо, ×
+          <input type="number" id="screener-leverage" value="1" min="0.1" step="0.5">
+        </label>
+        <label class="pnl-checkbox-label">
+          <input type="checkbox" id="screener-two-legs" checked>
+          2 ноги (капитал пополам)
+        </label>
+      </div>
+      <div class="pnl-controls">
+        <label class="pnl-notional-label">Комиссия за сделку, %
+          <input type="number" id="screener-fee-pct" value="0.05" min="0" step="0.001">
+        </label>
+        <label class="pnl-notional-label">Реинвест прибыли, %
+          <input type="number" id="screener-reinvest-pct" value="0" min="0" max="100" step="5">
+        </label>
+        <label class="pnl-notional-label">Период с
+          <input type="date" id="screener-start-date">
+        </label>
+        <label class="pnl-notional-label">по
+          <input type="date" id="screener-end-date">
+        </label>
+      </div>
+
+      <div class="pnl-controls" id="screener-assets-mode">
+        <label class="pnl-notional-label">Биржа
+          <select id="screener-exchange-select">
+            <option value="okx">OKX</option>
+            <option value="binance" selected>Binance</option>
+            <option value="hyperliquid">Hyperliquid</option>
+          </select>
+        </label>
+      </div>
+      <div class="pnl-controls" id="screener-exchanges-mode" style="display:none">
+        <label class="pnl-notional-label">Актив
+          <select id="screener-asset-select">
+          {% for key, info in assets.items() %}
+            <option value="{{ key }}">{{ info.label }}</option>
+          {% endfor %}
+          </select>
+        </label>
+      </div>
+
       <div class="screener-checks" id="screener-asset-picker">
       {% for key, info in assets.items() %}
         <label class="screener-check"><input type="checkbox" value="{{ key }}" checked> {{ info.label }}</label>
       {% endfor %}
       </div>
+      <div class="screener-checks" id="screener-exchange-picker" style="display:none">
+        <label class="screener-check"><input type="checkbox" value="okx" checked> OKX</label>
+        <label class="screener-check"><input type="checkbox" value="binance" checked> Binance</label>
+        <label class="screener-check"><input type="checkbox" value="hyperliquid" checked> Hyperliquid</label>
+      </div>
+
       <button type="button" class="btn blue" id="screener-run-btn">Сравнить</button>
       <p id="screener-status" class="status"></p>
       <div class="table-scroll" id="screener-table-wrap" style="display:none">

@@ -725,10 +725,38 @@ document.getElementById('pnl-fee-pct').addEventListener('input', (e) => {
   document.querySelectorAll('#pnl-fee-picker .pill').forEach(b => b.classList.remove('active'))
   renderPnlChart()
 })
-// Сравнение активов ("скринер") — та же симуляция (computeSimulation),
-// что и в основном P&L-симуляторе, и те же параметры (pnlState), просто
-// прогнанная по нескольким активам сразу на текущей выбранной бирже,
-// с сортировкой по итоговому чистому P&L.
+// Сравнение ("скринер") — та же симуляция (computeSimulation), что и в
+// основном P&L-симуляторе, но с ПОЛНОСТЬЮ отдельными параметрами
+// (screenerState) — независимо от pnlState симулятора выше. Два режима:
+// 'assets'    — одна (выбранная) биржа, сравниваем отмеченные активы;
+// 'exchanges' — один (выбранный) актив, сравниваем отмеченные биржи.
+// Комиссия здесь — простое число без пресетов мейкер/тейкер: в режиме
+// 'exchanges' биржи сравниваются одновременно, и разные биржи то стоят
+// свои ставки, единый пресет для всех был бы условным — проще дать
+// одно редактируемое поле на все строки сразу.
+const screenerState = {
+  mode: 'assets',
+  deposit: 10000, leverage: 1, twoLegs: true, feePct: 0.05, reinvestPct: 0,
+  side: 'short', startDate: null, endDate: null,
+}
+
+function filterDateRange(series, startDate, endDate) {
+  let result = series
+  if (startDate) {
+    const startMs = new Date(startDate + 'T00:00:00Z').getTime()
+    result = result.filter(p => p.ts >= startMs)
+  }
+  if (endDate) {
+    const endMs = new Date(endDate + 'T23:59:59Z').getTime()
+    result = result.filter(p => p.ts <= endMs)
+  }
+  return result
+}
+
+function screenerStartingNotional() {
+  return screenerState.deposit * (screenerState.twoLegs ? 0.5 : 1) * screenerState.leverage
+}
+
 async function fetchAssetFundingSeries(exchange, asset) {
   try {
     const r = await fetch(`/api/analysis/${exchange}/${asset}`)
@@ -742,31 +770,42 @@ async function fetchAssetFundingSeries(exchange, asset) {
 
 async function runScreener() {
   const statusEl = document.getElementById('screener-status')
-  const checked = Array.from(document.querySelectorAll('#screener-asset-picker input:checked')).map(cb => cb.value)
-  if (!checked.length) {
-    statusEl.textContent = '❌ Отметь хотя бы один актив.'
-    return
-  }
-  statusEl.textContent = `⏳ Считаю по ${checked.length} активам на ${EXCHANGE_LABELS[state.exchange]}...`
+  let targets = []
 
-  const exchange = state.exchange
-  const results = await Promise.all(checked.map(async asset => {
-    const series = await fetchAssetFundingSeries(exchange, asset)
-    const filtered = series ? filterFromDate(series, pnlState.startDate) : []
-    if (!filtered.length) return { asset, ok: false }
-    const sim = computeSimulation(filtered, pnlState)
+  if (screenerState.mode === 'assets') {
+    const exchange = document.getElementById('screener-exchange-select').value
+    const checked = Array.from(document.querySelectorAll('#screener-asset-picker input:checked')).map(cb => cb.value)
+    if (!checked.length) { statusEl.textContent = '❌ Отметь хотя бы один актив.'; return }
+    targets = checked.map(asset => ({ exchange, asset, label: ASSET_LABELS[asset] || asset }))
+  } else {
+    const asset = document.getElementById('screener-asset-select').value
+    const checked = Array.from(document.querySelectorAll('#screener-exchange-picker input:checked')).map(cb => cb.value)
+    if (!checked.length) { statusEl.textContent = '❌ Отметь хотя бы одну биржу.'; return }
+    targets = checked.map(exchange => ({ exchange, asset, label: EXCHANGE_LABELS[exchange] }))
+  }
+
+  statusEl.textContent = `⏳ Считаю (${targets.length})...`
+
+  const results = await Promise.all(targets.map(async t => {
+    const series = await fetchAssetFundingSeries(t.exchange, t.asset)
+    const filtered = series ? filterDateRange(series, screenerState.startDate, screenerState.endDate) : []
+    if (!filtered.length) return { ...t, ok: false }
+    const sim = computeSimulation(filtered, {
+      deposit: screenerState.deposit, leverage: screenerState.leverage, twoLegs: screenerState.twoLegs,
+      reinvestPct: screenerState.reinvestPct, side: screenerState.side,
+    })
     const gross = sim[sim.length - 1][1]
-    const notional = startingNotional()
-    const feeCost = notional * (pnlState.feePct / 100) * 2
-    return { asset, ok: true, gross, feeCost, net: gross - feeCost, notional }
+    const notional = screenerStartingNotional()
+    const feeCost = notional * (screenerState.feePct / 100) * 2
+    return { ...t, ok: true, gross, feeCost, net: gross - feeCost, notional }
   }))
 
   const valid = results.filter(r => r.ok).sort((a, b) => b.net - a.net)
-  const skipped = results.filter(r => !r.ok).map(r => ASSET_LABELS[r.asset] || r.asset)
+  const skipped = results.filter(r => !r.ok).map(r => r.label)
 
   statusEl.textContent = skipped.length
-    ? `Готово. Без данных на ${EXCHANGE_LABELS[exchange]}: ${skipped.join(', ')}.`
-    : `Готово (${valid.length} активов).`
+    ? `Готово. Без данных: ${skipped.join(', ')}.`
+    : `Готово (${valid.length}).`
 
   renderScreenerTable(valid)
   renderScreenerChart(valid)
@@ -777,10 +816,11 @@ function renderScreenerTable(rows) {
   const el = document.getElementById('screener-table')
   if (!rows.length) { wrap.style.display = 'none'; el.innerHTML = ''; return }
   wrap.style.display = 'block'
-  let html = '<thead><tr><th>Актив</th><th>Ноционал</th><th>Фандинг</th><th>Комиссия</th><th>Чистый P&L</th></tr></thead><tbody>'
+  const firstCol = screenerState.mode === 'assets' ? 'Актив' : 'Биржа'
+  let html = `<thead><tr><th>${firstCol}</th><th>Ноционал</th><th>Фандинг</th><th>Комиссия</th><th>Чистый P&L</th></tr></thead><tbody>`
   rows.forEach(r => {
     html += `<tr>
-      <td class="asset-link" data-asset="${r.asset}">${ASSET_LABELS[r.asset] || r.asset}</td>
+      <td class="asset-link" data-exchange="${r.exchange}" data-asset="${r.asset}">${r.label}</td>
       <td class="num">$${r.notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}</td>
       <td class="num ${signClass(r.gross)}-cell">${fmtMoney(r.gross)}</td>
       <td class="num neg-cell">−$${r.feeCost.toFixed(2)}</td>
@@ -790,7 +830,7 @@ function renderScreenerTable(rows) {
   html += '</tbody>'
   el.innerHTML = html
   el.querySelectorAll('td.asset-link').forEach(td => {
-    td.addEventListener('click', () => selectAsset(td.dataset.asset))
+    td.addEventListener('click', () => setInitialSelection(td.dataset.exchange, td.dataset.asset))
   })
 }
 
@@ -807,7 +847,7 @@ function renderScreenerChart(rows) {
   screenerChart.resize()
 
   const sorted = [...rows].sort((a, b) => a.net - b.net) // по возрастанию — в ECharts категории идут снизу вверх
-  const labels = sorted.map(r => ASSET_LABELS[r.asset] || r.asset)
+  const labels = sorted.map(r => r.label)
   const values = sorted.map(r => r.net)
 
   screenerChart.clear()
@@ -836,6 +876,48 @@ function renderScreenerChart(rows) {
   })
 }
 
+document.querySelectorAll('#screener-mode-picker .pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    screenerState.mode = btn.dataset.mode
+    document.querySelectorAll('#screener-mode-picker .pill').forEach(b => b.classList.toggle('active', b === btn))
+    const isAssets = screenerState.mode === 'assets'
+    document.getElementById('screener-assets-mode').style.display = isAssets ? '' : 'none'
+    document.getElementById('screener-exchanges-mode').style.display = isAssets ? 'none' : ''
+    document.getElementById('screener-asset-picker').style.display = isAssets ? '' : 'none'
+    document.getElementById('screener-exchange-picker').style.display = isAssets ? 'none' : ''
+  })
+})
+document.querySelectorAll('#screener-side-picker .pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    screenerState.side = btn.dataset.side
+    document.querySelectorAll('#screener-side-picker .pill').forEach(b => b.classList.toggle('active', b === btn))
+  })
+})
+document.getElementById('screener-deposit').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (isFinite(v) && v > 0) screenerState.deposit = v
+})
+document.getElementById('screener-leverage').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (isFinite(v) && v > 0) screenerState.leverage = v
+})
+document.getElementById('screener-two-legs').addEventListener('change', (e) => {
+  screenerState.twoLegs = e.target.checked
+})
+document.getElementById('screener-fee-pct').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (isFinite(v) && v >= 0) screenerState.feePct = v
+})
+document.getElementById('screener-reinvest-pct').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (isFinite(v) && v >= 0 && v <= 100) screenerState.reinvestPct = v
+})
+document.getElementById('screener-start-date').addEventListener('change', (e) => {
+  screenerState.startDate = e.target.value || null
+})
+document.getElementById('screener-end-date').addEventListener('change', (e) => {
+  screenerState.endDate = e.target.value || null
+})
 document.getElementById('screener-run-btn').addEventListener('click', runScreener)
 
 window.addEventListener('resize', () => {
