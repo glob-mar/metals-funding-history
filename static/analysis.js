@@ -486,6 +486,16 @@ function computeRebalances(priceSeries, { deposit, leverage, side, thresholdPct 
   return count
 }
 
+// Простая (линейная, не сложная) экстраполяция на год — тот же подход,
+// что и в шапке экрана для APR (там тоже средняя ставка × периодов в год,
+// а не геометрическое сложное начисление). Возврат null, если период короче
+// суток — на таком масштабе экстраполяция на год не имеет смысла.
+function annualizedPct(pctReturn, startTs, endTs) {
+  const days = (endTs - startTs) / 86400000
+  if (days < 1) return null
+  return pctReturn * (365 / days)
+}
+
 function renderPnlSummary() {
   const el = document.getElementById('pnl-summary')
   const periodEl = document.getElementById('pnl-period-note')
@@ -506,12 +516,18 @@ function renderPnlSummary() {
   const notional = startingNotional()
   const feeCost = notional * (pnlState.feePct / 100) * 2
   const net = gross - feeCost
+  // Доходность в % — от депозита (реально вложенных денег), а не от
+  // ноционала (который может быть больше депозита из-за плеча).
+  const pctReturn = (net / pnlState.deposit) * 100
+  const annPct = annualizedPct(pctReturn, series[0].ts, series[series.length - 1].ts)
 
   const cards = [
     { label: 'Стартовый ноционал', value: `$${notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}`, sign: 0 },
     { label: 'Фандинг (до комиссии)', value: fmtMoney(gross), sign: gross },
     { label: 'Комиссия вход+выход', value: `−$${feeCost.toFixed(2)}`, sign: 0 },
     { label: 'Чистый P&L', value: fmtMoney(net), sign: net },
+    { label: 'Доходность, %', value: fmtPct(pctReturn), sign: pctReturn, detail: 'от депозита, за период' },
+    { label: 'Доходность, % годовых', value: annPct === null ? 'н/д' : fmtPct(annPct), sign: annPct || 0, detail: 'линейная экстраполяция на год' },
   ]
 
   if (pnlState.twoLegs) {
@@ -797,7 +813,10 @@ async function runScreener() {
     const gross = sim[sim.length - 1][1]
     const notional = screenerStartingNotional()
     const feeCost = notional * (screenerState.feePct / 100) * 2
-    return { ...t, ok: true, gross, feeCost, net: gross - feeCost, notional }
+    const net = gross - feeCost
+    const pctReturn = (net / screenerState.deposit) * 100
+    const annPct = annualizedPct(pctReturn, filtered[0].ts, filtered[filtered.length - 1].ts)
+    return { ...t, ok: true, gross, feeCost, net, notional, pctReturn, annPct }
   }))
 
   const valid = results.filter(r => r.ok).sort((a, b) => b.net - a.net)
@@ -817,7 +836,7 @@ function renderScreenerTable(rows) {
   if (!rows.length) { wrap.style.display = 'none'; el.innerHTML = ''; return }
   wrap.style.display = 'block'
   const firstCol = screenerState.mode === 'assets' ? 'Актив' : 'Биржа'
-  let html = `<thead><tr><th>${firstCol}</th><th>Ноционал</th><th>Фандинг</th><th>Комиссия</th><th>Чистый P&L</th></tr></thead><tbody>`
+  let html = `<thead><tr><th>${firstCol}</th><th>Ноционал</th><th>Фандинг</th><th>Комиссия</th><th>Чистый P&L</th><th>Доходность, %</th><th>% годовых</th></tr></thead><tbody>`
   rows.forEach(r => {
     html += `<tr>
       <td class="asset-link" data-exchange="${r.exchange}" data-asset="${r.asset}">${r.label}</td>
@@ -825,6 +844,8 @@ function renderScreenerTable(rows) {
       <td class="num ${signClass(r.gross)}-cell">${fmtMoney(r.gross)}</td>
       <td class="num neg-cell">−$${r.feeCost.toFixed(2)}</td>
       <td class="num total-cell ${signClass(r.net)}-cell">${fmtMoney(r.net)}</td>
+      <td class="num ${signClass(r.pctReturn)}-cell">${fmtPct(r.pctReturn)}</td>
+      <td class="num ${signClass(r.annPct || 0)}-cell">${r.annPct === null ? 'н/д' : fmtPct(r.annPct)}</td>
     </tr>`
   })
   html += '</tbody>'
