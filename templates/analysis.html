@@ -72,6 +72,23 @@
 
     <div class="chart-card">
       <div class="chart-card-header">
+        <span class="chart-title">Симулятор накопленного дохода от фандинга</span>
+        <div class="pnl-controls">
+          <div class="pill-row" id="pnl-side-picker">
+            <button class="pill asset active" data-side="short">Шорт</button>
+            <button class="pill asset" data-side="long">Лонг</button>
+          </div>
+          <label class="pnl-notional-label">Ноционал, $
+            <input type="number" id="pnl-notional" value="10000" min="1" step="1000">
+          </label>
+        </div>
+      </div>
+      <div class="a-hero-sub" id="pnl-summary"></div>
+      <div id="pnl-chart" class="chart-box"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
         <span class="chart-title">Цена актива</span>
       </div>
       <div id="price-chart" class="chart-box"></div>

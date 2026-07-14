@@ -4,8 +4,11 @@ const state = { exchange: 'binance', asset: 'XAU' }
 let fundingChart = null
 let priceChart = null
 let heatmapChart = null
+let pnlChart = null
 let liveData = null
 let lastLiveAsset = null
+let currentFundingSeries = []
+const pnlState = { notional: 10000, side: 'short' }
 
 function fmtPct(v, digits = 2) {
   if (v === null || v === undefined) return '—'
@@ -137,6 +140,8 @@ function render(data) {
   renderStatStrip(data.stats, data.cross_exchange)
   renderMonthlyTable(data.monthly)
   renderFundingChart(data.funding_series)
+  currentFundingSeries = data.funding_series
+  renderPnlChart()
   renderPriceChart(data.price_series)
   renderHeatmapChart(data.heatmap)
 
@@ -300,6 +305,80 @@ function renderFundingChart(series) {
   fundingChart.setOption(fundingChartOption(series))
 }
 
+// Конвенция знака funding rate — стандартная для перпетуалов на всех трёх
+// биржах: положительная ставка = лонги платят шортам. Поэтому шорт получает
+// +notional*rate за период, лонг — ровно наоборот.
+function computeCumulativePnl(series, notional, side) {
+  const sign = side === 'short' ? 1 : -1
+  let cum = 0
+  return series.map(p => {
+    cum += sign * notional * (p.rate_pct / 100)
+    return [p.ts, cum]
+  })
+}
+
+function pnlChartOption(series) {
+  const data = computeCumulativePnl(series, pnlState.notional, pnlState.side)
+  const base = baseAxisStyle()
+  const values = data.map(d => d[1])
+  const dataMax = Math.max(...values, 0)
+  const dataMin = Math.min(...values, 0)
+  const pad = (dataMax - dataMin) * 0.1 || 1
+  const axisMax = dataMax + pad
+  const axisMin = dataMin - pad
+  const lineColor = divergingGradient(axisMin, axisMax, '#3fb950', '#f85149')
+  const areaColor = divergingGradient(axisMin, axisMax, 'rgba(63,185,80,.2)', 'rgba(248,81,73,.2)')
+
+  return {
+    backgroundColor: 'transparent',
+    animation: false,
+    grid: { left: 65, right: 20, top: 20, bottom: 20 },
+    tooltip: { ...base.tooltip, valueFormatter: v => '$' + v.toFixed(2) },
+    xAxis: base.xAxis,
+    yAxis: {
+      ...base.yAxis, scale: false, min: axisMin, max: axisMax,
+      axisLabel: {
+        ...base.yAxis.axisLabel, formatter: v => '$' + v.toFixed(0),
+        showMinLabel: false, showMaxLabel: false,
+      },
+    },
+    dataZoom: [{ type: 'inside' }],
+    series: [{
+      type: 'line', data, showSymbol: false, lineStyle: { width: 1.3, color: lineColor },
+      areaStyle: { color: areaColor },
+      progressive: 0,
+      markLine: {
+        symbol: 'none', silent: true, animation: false,
+        lineStyle: { color: '#484f58', type: 'dashed' },
+        data: [{ yAxis: 0 }], label: { show: false },
+      },
+    }],
+  }
+}
+
+function renderPnlSummary() {
+  const el = document.getElementById('pnl-summary')
+  if (!currentFundingSeries.length) { el.textContent = ''; return }
+  const data = computeCumulativePnl(currentFundingSeries, pnlState.notional, pnlState.side)
+  const total = data[data.length - 1][1]
+  const sideLabel = pnlState.side === 'short' ? 'шорте' : 'лонге'
+  const sign = total >= 0 ? '+' : '−'
+  el.innerHTML = `При ${sideLabel} на $${pnlState.notional.toLocaleString('ru-RU')} за всю историю: ` +
+    `<b class="num ${signClass(total)}">${sign}$${Math.abs(total).toFixed(2)}</b>`
+}
+
+function renderPnlChart() {
+  const el = document.getElementById('pnl-chart')
+  if (!pnlChart) pnlChart = echarts.init(el, null, { renderer: 'canvas' })
+  if (!currentFundingSeries.length) {
+    pnlChart.clear()
+    return
+  }
+  pnlChart.clear()
+  pnlChart.setOption(pnlChartOption(currentFundingSeries))
+  renderPnlSummary()
+}
+
 function priceChartOption(series) {
   const data = series.map(p => [p.ts, p.close])
   const base = baseAxisStyle()
@@ -418,10 +497,24 @@ document.querySelectorAll('#a-range-buttons button').forEach(btn => {
     applyRange(btn.dataset.range)
   })
 })
+document.querySelectorAll('#pnl-side-picker .pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    pnlState.side = btn.dataset.side
+    document.querySelectorAll('#pnl-side-picker .pill').forEach(b => b.classList.toggle('active', b === btn))
+    renderPnlChart()
+  })
+})
+document.getElementById('pnl-notional').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v <= 0) return
+  pnlState.notional = v
+  renderPnlChart()
+})
 window.addEventListener('resize', () => {
   if (fundingChart) fundingChart.resize()
   if (priceChart) priceChart.resize()
   if (heatmapChart) heatmapChart.resize()
+  if (pnlChart) pnlChart.resize()
 })
 
 setInterval(updateCountdown, 1000)
