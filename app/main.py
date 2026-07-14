@@ -18,7 +18,7 @@ from .db import (
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from .metrics import periods_per_year, interval_label
-from .analysis import exchange_stats, monthly_table, funding_price_correlation, hourly_heatmap
+from .analysis import exchange_stats, monthly_table, funding_price_correlation
 from . import scheduler
 
 EXCHANGES = ('binance', 'okx', 'hyperliquid')
@@ -196,11 +196,6 @@ async def analysis(exchange: str, asset: str):
                 'message': 'Нет данных для этой пары. Нажми «Собрать» сначала.',
             })
 
-        cross_exchange = {
-            ex: exchange_stats(ex_rows)
-            for ex, ex_rows in by_exchange.items() if ex_rows
-        }
-
         price_rows = await get_price_history(asset)
         price_rows_ex = [p for p in price_rows if p['exchange'] == exchange]
         price_series = [{'ts': p['ts'], 'close': p['close']} for p in price_rows_ex]
@@ -223,8 +218,6 @@ async def analysis(exchange: str, asset: str):
             'symbol': rows[0]['symbol'],
             'stats': stats,
             'monthly': monthly_table(rows),
-            'heatmap': hourly_heatmap(rows),
-            'cross_exchange': cross_exchange,
             'funding_series': funding_series,
             'price_series': price_series,
         })

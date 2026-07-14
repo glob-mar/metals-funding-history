@@ -3,7 +3,6 @@ const EXCHANGE_LABELS = { okx: 'OKX', binance: 'Binance', hyperliquid: 'Hyperliq
 const state = { exchange: 'binance', asset: 'XAU' }
 let fundingChart = null
 let priceChart = null
-let heatmapChart = null
 let pnlChart = null
 let liveData = null
 let lastLiveAsset = null
@@ -137,13 +136,12 @@ function render(data) {
 
   renderHeader(data)
   renderHero(data.stats)
-  renderStatStrip(data.stats, data.cross_exchange)
+  renderStatStrip(data.stats)
   renderMonthlyTable(data.monthly)
   renderFundingChart(data.funding_series)
   currentFundingSeries = data.funding_series
   renderPnlChart()
   renderPriceChart(data.price_series)
-  renderHeatmapChart(data.heatmap)
 
   if (fundingChart && priceChart && data.price_series.length) {
     fundingChart.group = 'analysis-sync'
@@ -169,23 +167,20 @@ function renderHero(stats) {
     `Средняя ставка за период: ${fmtPct(stats.avg_rate_pct, 6)} · ${stats.periods} периодов · ${stats.date_start.slice(0, 10)} → ${stats.date_end.slice(0, 10)}`
 }
 
-function renderStatStrip(stats, crossExchange) {
-  const entries = Object.entries(crossExchange).map(([ex, st]) => ({ ex, y: st.annualized_yield_pct }))
-  const spread = entries.length > 1 ? Math.max(...entries.map(e => e.y)) - Math.min(...entries.map(e => e.y)) : 0
-  const spreadDetail = entries.map(e => `${EXCHANGE_LABELS[e.ex]} ${fmtPct(e.y, 1)}`).join(' · ')
+const CORRELATION_TIP = 'Коэффициент корреляции Пирсона между дневной средней ставкой фандинга и дневной средней ценой актива. От −1 до +1: ближе к +1 — ставка и цена растут/падают вместе; ближе к −1 — двигаются в противоположные стороны; около 0 — связи не видно. Нужно минимум 3 общих дня по обоим рядам, иначе «н/д».'
 
+function renderStatStrip(stats) {
   const corr = stats.correlation_price
   const cards = [
     { label: 'Накопленная доходность', value: fmtPct(stats.cumulative_return_pct), sign: stats.cumulative_return_pct },
     { label: 'Волатильность ставки', value: `${stats.volatility_pct.toFixed(4)}%`, sign: 0 },
-    { label: 'Спред между биржами', value: `${spread.toFixed(2)} п.п.`, sign: 0, detail: spreadDetail },
     { label: '% положительных периодов', value: `${stats.pct_positive}%`, sign: stats.pct_positive - 50 },
-    { label: 'Корреляция с ценой', value: corr === null ? 'н/д' : corr.toFixed(2), sign: corr || 0 },
+    { label: 'Корреляция с ценой', value: corr === null ? 'н/д' : corr.toFixed(2), sign: corr || 0, tip: CORRELATION_TIP },
   ]
 
   document.getElementById('a-stat-strip').innerHTML = cards.map(c => `
     <div class="stat-card">
-      <div class="stat-label">${c.label}</div>
+      <div class="stat-label">${c.label}${c.tip ? `<span class="info-tip" data-tip="${c.tip}">ⓘ</span>` : ''}</div>
       <div class="stat-value ${signClass(c.sign)} num">${c.value}</div>
       ${c.detail ? `<div class="stat-detail">${c.detail}</div>` : ''}
     </div>
@@ -426,50 +421,6 @@ function renderPriceChart(series) {
   priceChart.setOption(priceChartOption(series))
 }
 
-const HEATMAP_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-
-function heatmapChartOption(heatmap) {
-  const hours = [...new Set(heatmap.map(h => h.hour))].sort((a, b) => a - b)
-  const data = heatmap.map(h => [hours.indexOf(h.hour), h.day, h.avg_rate_pct])
-  const values = heatmap.map(h => h.avg_rate_pct)
-  const maxAbs = Math.max(Math.abs(Math.min(...values, 0)), Math.abs(Math.max(...values, 0))) || 1
-  return {
-    backgroundColor: 'transparent',
-    animation: false,
-    grid: { left: 45, right: 20, top: 10, bottom: 20 },
-    tooltip: {
-      backgroundColor: '#161b22', borderColor: '#30363d', textStyle: { color: '#e6edf3' },
-      formatter: p => `${HEATMAP_DAYS[p.value[1]]}, ${hours[p.value[0]]}:00 UTC<br>${fmtPct(p.value[2], 5)}`,
-    },
-    xAxis: {
-      type: 'category', data: hours.map(h => `${h}:00`),
-      axisLine: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#6e7681' }, splitArea: { show: false },
-    },
-    yAxis: {
-      type: 'category', data: HEATMAP_DAYS,
-      axisLine: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#6e7681' }, splitArea: { show: false },
-    },
-    visualMap: {
-      type: 'continuous', show: false, min: -maxAbs, max: maxAbs,
-      inRange: { color: ['#f85149', '#21262d', '#3fb950'] },
-    },
-    series: [{
-      type: 'heatmap', data, itemStyle: { borderColor: '#0d1117', borderWidth: 2 },
-    }],
-  }
-}
-
-function renderHeatmapChart(heatmap) {
-  const el = document.getElementById('heatmap-chart')
-  if (!heatmapChart) heatmapChart = echarts.init(el, null, { renderer: 'canvas' })
-  if (!heatmap.length) {
-    heatmapChart.clear()
-    return
-  }
-  heatmapChart.clear()
-  heatmapChart.setOption(heatmapChartOption(heatmap))
-}
-
 function applyRange(range) {
   if (!fundingChart) return
   const now = Date.now()
@@ -513,7 +464,6 @@ document.getElementById('pnl-notional').addEventListener('input', (e) => {
 window.addEventListener('resize', () => {
   if (fundingChart) fundingChart.resize()
   if (priceChart) priceChart.resize()
-  if (heatmapChart) heatmapChart.resize()
   if (pnlChart) pnlChart.resize()
 })
 

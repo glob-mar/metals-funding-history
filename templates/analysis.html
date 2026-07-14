@@ -49,7 +49,9 @@
     </div>
 
     <div class="a-hero">
-      <div class="a-hero-label">Годовая доходность (APR)</div>
+      <div class="a-hero-label">Годовая доходность (APR)
+        <span class="info-tip" data-tip="APR = средняя ставка за период × количество периодов начисления в год × 100%. Количество периодов в год считается по факту данных (медиана интервала между начислениями), а не хардкодом — поэтому может отличаться для одного и того же актива на разных биржах.">ⓘ</span>
+      </div>
       <div class="a-hero-value num" id="a-hero-value">—</div>
       <div class="a-hero-sub" id="a-hero-sub"></div>
     </div>
@@ -102,13 +104,6 @@
       <div class="table-scroll">
         <table class="monthly-table" id="monthly-table"></table>
       </div>
-    </div>
-
-    <div class="chart-card">
-      <div class="chart-card-header">
-        <span class="chart-title">Сезонность ставки (день недели × час UTC)</span>
-      </div>
-      <div id="heatmap-chart" class="chart-box" style="height:260px"></div>
     </div>
   </div>
 </div>

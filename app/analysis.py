@@ -68,25 +68,6 @@ def funding_price_correlation(funding_rows: list[dict], price_rows: list[dict]) 
     return round(cov / (var_x ** 0.5 * var_y ** 0.5), 4)
 
 
-def hourly_heatmap(funding_rows: list[dict]) -> list[dict]:
-    """Средняя ставка по (день недели, час UTC) — для heatmap сезонности.
-    day: 0=Пн..6=Вс (как в datetime.weekday())."""
-    buckets: dict = defaultdict(list)
-    for r in funding_rows:
-        fr = r['funding_rate'] if r['funding_rate'] is not None else 0.0
-        dt = datetime.fromtimestamp(r['funding_time'] / 1000, tz=timezone.utc)
-        buckets[(dt.weekday(), dt.hour)].append(fr)
-    result = []
-    for (day, hour), rates in sorted(buckets.items()):
-        result.append({
-            'day': day,
-            'hour': hour,
-            'avg_rate_pct': round(sum(rates) / len(rates) * 100, 6),
-            'count': len(rates),
-        })
-    return result
-
-
 def monthly_table(rows: list[dict]) -> list[dict]:
     """Помесячная доходность для одной пары (биржа, актив): доходность за месяц —
     сумма ставок за месяц (см. Инструкцию: без домножения на 365)."""
