@@ -11,6 +11,27 @@ let currentFundingSeries = []
 const pnlState = {
   deposit: 10000, leverage: 1, twoLegs: true, reinvestPct: 0,
   side: 'short', feeType: 'taker', feePct: 0.05,
+  startDate: null, rebalanceThresholdPct: 50,
+}
+
+// null = считаем с самого начала собранной истории. Диапазон дат в поле
+// «Считать с» сбрасывается на полную историю при каждой смене биржи/актива —
+// разные пары не гарантированно имеют одинаковый охват дат.
+function syncPnlDateRange(series) {
+  const input = document.getElementById('pnl-start-date')
+  pnlState.startDate = null
+  if (!series.length) { input.value = ''; input.min = ''; input.max = ''; return }
+  const minDate = new Date(series[0].ts).toISOString().slice(0, 10)
+  const maxDate = new Date(series[series.length - 1].ts).toISOString().slice(0, 10)
+  input.min = minDate
+  input.max = maxDate
+  input.value = minDate
+}
+
+function filterFromDate(series, startDate) {
+  if (!startDate) return series
+  const startMs = new Date(startDate + 'T00:00:00Z').getTime()
+  return series.filter(p => p.ts >= startMs)
 }
 // Ориентировочные ставки round-trip комиссии по обычному (не VIP) тарифу —
 // могут отличаться от факта и меняться биржами со временем, поэтому дают
@@ -158,7 +179,9 @@ function render(data) {
   renderMonthlyTable(data.monthly)
   renderFundingChart(data.funding_series)
   currentFundingSeries = data.funding_series
+  currentPriceSeries = data.price_series
   syncFeePreset()
+  syncPnlDateRange(data.funding_series)
   renderPnlChart()
   renderPriceChart(data.price_series)
 
@@ -396,33 +419,92 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`
 }
 
+// Оценка «сколько раз пришлось бы перекинуть маржу между ногами». Модель:
+// капитал поровну на двух ногах (эта биржа + хедж на форексе вне дашборда),
+// цена одна и та же для обеих (считаем хедж идеальным, без базисного риска) —
+// значит одна нога зарабатывает на движении цены ровно то, что теряет другая.
+// Как только просевшая нога падает ниже порога от своей стартовой доли, это
+// точка, где в реальности потребовался бы перевод — после него обе ноги
+// условно снова выравниваются 50/50, и отсчёт от текущей цены идёт заново.
+// Не учитывает реинвест (Реинвест) — совмещать растущий от реинвеста
+// ноционал с этой моделью маржи было бы отдельной, гораздо более сложной
+// задачей, не нужной для оценки порядка величины.
+function computeRebalances(priceSeries, { deposit, leverage, side, thresholdPct }) {
+  if (!priceSeries.length) return 0
+  const sign = side === 'short' ? -1 : 1
+  const legCapital = deposit / 2
+  const notional = legCapital * leverage
+  const threshold = legCapital * (thresholdPct / 100)
+  let entryPrice = priceSeries[0].close
+  let count = 0
+  for (const p of priceSeries) {
+    const changePct = (p.close - entryPrice) / entryPrice
+    const pnl = notional * changePct * sign
+    if (legCapital + pnl < threshold || legCapital - pnl < threshold) {
+      count++
+      entryPrice = p.close
+    }
+  }
+  return count
+}
+
 function renderPnlSummary() {
   const el = document.getElementById('pnl-summary')
-  if (!currentFundingSeries.length) { el.textContent = ''; return }
-  const data = computeSimulation(currentFundingSeries, pnlState)
+  const periodEl = document.getElementById('pnl-period-note')
+  const series = filterFromDate(currentFundingSeries, pnlState.startDate)
+  if (!series.length) { el.innerHTML = ''; periodEl.textContent = ''; return }
+
+  const start = new Date(series[0].ts).toISOString().slice(0, 10)
+  const end = new Date(series[series.length - 1].ts).toISOString().slice(0, 10)
+  periodEl.textContent = `Период расчёта: ${start} → ${end} (${series.length} периодов фандинга)`
+
+  const data = computeSimulation(series, pnlState)
   const gross = data[data.length - 1][1]
   const notional = startingNotional()
   const feeCost = notional * (pnlState.feePct / 100) * 2
   const net = gross - feeCost
-  const sideLabel = pnlState.side === 'short' ? 'шорте' : 'лонге'
-  const legsNote = pnlState.twoLegs ? ', 2 ноги (÷2)' : ''
-  const reinvestNote = pnlState.reinvestPct > 0 ? ` · реинвест ${pnlState.reinvestPct}%` : ''
-  el.innerHTML = `Депозит $${pnlState.deposit.toLocaleString('ru-RU')}, плечо ${pnlState.leverage}×${legsNote} ` +
-    `→ стартовый ноционал $${notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} на ${sideLabel}${reinvestNote}<br>` +
-    `За всю историю: фандинг <b class="num ${signClass(gross)}">${fmtMoney(gross)}</b> · ` +
-    `комиссия вход+выход <b class="num neg">−$${feeCost.toFixed(2)}</b> · ` +
-    `чистыми <b class="num ${signClass(net)}">${fmtMoney(net)}</b>`
+
+  const cards = [
+    { label: 'Стартовый ноционал', value: `$${notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}`, sign: 0 },
+    { label: 'Фандинг (до комиссии)', value: fmtMoney(gross), sign: gross },
+    { label: 'Комиссия вход+выход', value: `−$${feeCost.toFixed(2)}`, sign: 0 },
+    { label: 'Чистый P&L', value: fmtMoney(net), sign: net },
+  ]
+
+  if (pnlState.twoLegs) {
+    const priceSeries = filterFromDate(currentPriceSeries, pnlState.startDate)
+    const rebalances = computeRebalances(priceSeries, {
+      deposit: pnlState.deposit, leverage: pnlState.leverage, side: pnlState.side,
+      thresholdPct: pnlState.rebalanceThresholdPct,
+    })
+    cards.push({
+      label: 'Переводов между ногами',
+      value: priceSeries.length ? String(rebalances) : 'нет цены',
+      sign: 0,
+      detail: `порог ${pnlState.rebalanceThresholdPct}% от ноги`,
+    })
+  }
+
+  el.innerHTML = cards.map(c => `
+    <div class="stat-card">
+      <div class="stat-label">${c.label}</div>
+      <div class="stat-value ${signClass(c.sign)} num">${c.value}</div>
+      ${c.detail ? `<div class="stat-detail">${c.detail}</div>` : ''}
+    </div>
+  `).join('')
 }
 
 function renderPnlChart() {
   const el = document.getElementById('pnl-chart')
   if (!pnlChart) pnlChart = echarts.init(el, null, { renderer: 'canvas' })
-  if (!currentFundingSeries.length) {
+  const series = filterFromDate(currentFundingSeries, pnlState.startDate)
+  if (!series.length) {
     pnlChart.clear()
+    renderPnlSummary()
     return
   }
   pnlChart.clear()
-  pnlChart.setOption(pnlChartOption(currentFundingSeries))
+  pnlChart.setOption(pnlChartOption(series))
   renderPnlSummary()
 }
 
@@ -563,12 +645,23 @@ document.getElementById('pnl-leverage').addEventListener('input', (e) => {
 })
 document.getElementById('pnl-two-legs').addEventListener('change', (e) => {
   pnlState.twoLegs = e.target.checked
+  document.getElementById('pnl-threshold-wrap').style.display = pnlState.twoLegs ? '' : 'none'
+  renderPnlChart()
+})
+document.getElementById('pnl-rebalance-threshold').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v <= 0 || v >= 100) return
+  pnlState.rebalanceThresholdPct = v
   renderPnlChart()
 })
 document.getElementById('pnl-reinvest-pct').addEventListener('input', (e) => {
   const v = parseFloat(e.target.value)
   if (!isFinite(v) || v < 0 || v > 100) return
   pnlState.reinvestPct = v
+  renderPnlChart()
+})
+document.getElementById('pnl-start-date').addEventListener('change', (e) => {
+  pnlState.startDate = e.target.value || null
   renderPnlChart()
 })
 document.querySelectorAll('#pnl-fee-picker .pill').forEach(btn => {
