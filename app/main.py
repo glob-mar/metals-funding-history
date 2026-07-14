@@ -69,6 +69,16 @@ async def sync_status():
     return JSONResponse({'ok': True, **scheduler.status})
 
 
+@app.post('/api/sync-all')
+async def sync_all():
+    """Ручной форс-запуск автосбора (Блок 8) по всем добавленным активам сразу,
+    не дожидаясь часового расписания. Прогресс — через /api/sync-status."""
+    if scheduler.status['running']:
+        return JSONResponse({'ok': False, 'error': 'Сбор уже идёт, дождись завершения текущего прохода'}, status_code=409)
+    asyncio.create_task(scheduler.sync_all_assets())
+    return JSONResponse({'ok': True, 'started': True})
+
+
 @app.get('/api/assets')
 async def list_assets():
     return JSONResponse({'ok': True, 'assets': ASSETS})

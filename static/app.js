@@ -15,32 +15,67 @@ async function deleteAsset(asset) {
 
 async function loadSyncStatus() {
   const el = document.getElementById('auto-sync-status')
-  if (!el) return
+  if (!el) return null
   try {
     const r = await fetch('/api/sync-status')
     const data = await r.json()
     if (!data.ok) {
       el.textContent = '⚠️ Не удалось получить статус автосбора'
-      return
+      return null
     }
     const every = `Автосбор каждые ${data.interval_minutes} мин.`
     if (!data.started_at) {
       el.textContent = `🕐 ${every} Ещё не запускался (первый проход — вскоре после старта сервера).`
-      return
+      return data
     }
     const started = new Date(data.started_at).toLocaleString('ru-RU')
     if (data.running) {
       el.textContent = `⏳ ${every} Идёт сбор, начат в ${started}...`
-      return
+      return data
     }
     const results = data.results || {}
     const assets = Object.keys(results)
     const ok = assets.filter(a => results[a].ok).length
     const finished = data.finished_at ? new Date(data.finished_at).toLocaleString('ru-RU') : '—'
     el.textContent = `✅ ${every} Последний проход: ${finished} (успешно ${ok}/${assets.length} активов)`
+    return data
   } catch (e) {
     el.textContent = '⚠️ Ошибка сети при получении статуса автосбора'
+    return null
   }
+}
+
+let syncAllPollTimer = null
+
+async function syncAll() {
+  const btn = document.getElementById('sync-all-btn')
+  try {
+    const r = await fetch('/api/sync-all', { method: 'POST' })
+    const data = await r.json()
+    if (!data.ok && !data.started) {
+      // 409 — сбор уже идёт кем-то другим, просто подключаемся к опросу статуса.
+      if (r.status !== 409) {
+        alert('Ошибка: ' + (data.error || 'неизвестная ошибка'))
+        return
+      }
+    }
+  } catch (e) {
+    alert('Ошибка сети: ' + e.message)
+    return
+  }
+
+  btn.disabled = true
+  btn.textContent = '⏳ Собираю...'
+  if (syncAllPollTimer) clearInterval(syncAllPollTimer)
+  syncAllPollTimer = setInterval(async () => {
+    const data = await loadSyncStatus()
+    if (data && !data.running) {
+      clearInterval(syncAllPollTimer)
+      syncAllPollTimer = null
+      btn.disabled = false
+      btn.textContent = '▶ Собрать всё'
+    }
+  }, 3000)
 }
 
 document.addEventListener('DOMContentLoaded', () => {
