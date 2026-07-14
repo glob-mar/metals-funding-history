@@ -3,102 +3,218 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Funding Rate History</title>
+<title>Аналитика — Funding Rate History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/analysis.css">
 </head>
 <body>
 <div class="container">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
-    <div>
-      <h1>📈 Funding Rate History</h1>
-      <p class="subtitle">История ставок финансирования: OKX · Binance · Hyperliquid</p>
-      <p class="subtitle" id="auto-sync-status">⏳ Проверяю статус автосбора...</p>
+  <div class="a-topbar">
+    <h1 class="a-title">📊 Аналитика по фандингу</h1>
+  </div>
+
+  <div class="picker-row">
+    <div class="picker-group">
+      <span class="picker-label">Биржа</span>
+      <div class="pill-row" id="exchange-picker">
+        <button class="pill okx" data-exchange="okx">OKX</button>
+        <button class="pill bnb" data-exchange="binance">Binance</button>
+        <button class="pill hl" data-exchange="hyperliquid">Hyperliquid</button>
+      </div>
     </div>
-    <div style="display:flex;gap:.5rem;align-items:flex-start">
-      <button class="btn green" id="sync-all-btn" onclick="syncAll()">▶ Собрать всё</button>
-      <a class="btn blue" href="/analysis">📊 Аналитика</a>
+    <div class="picker-group">
+      <span class="picker-label">Актив</span>
+      <div class="pill-row" id="asset-picker">
+      {% for key, info in assets.items() %}
+        <button class="pill asset" data-asset="{{ key }}">{{ info.label }}</button>
+      {% endfor %}
+      </div>
     </div>
   </div>
 
-  <div class="grid">
-  {% for key, info in assets.items() %}
-  <div class="card">
-    <h2>{{ info.label }}</h2>
-    <div class="badges">
-      {% if info.okx %}<span class="badge okx">OKX</span>{% endif %}
-      {% if info.binance %}<span class="badge bnb">Binance</span>{% endif %}
-      <span class="badge hl">Hyperliquid</span>
+  <div id="a-loading" class="a-loading">Выбери биржу и актив.</div>
+
+  <div id="a-card" style="display:none">
+    <div class="a-header">
+      <span class="badge" id="a-badge-exchange"></span>
+      <h2 id="a-asset-label"></h2>
+      <span class="interval-tag" id="a-interval"></span>
+      <span class="live-tag" id="a-live-tag" style="display:none">
+        След. фандинг через <b id="a-live-countdown">—</b> · ставка <span id="a-live-rate" class="num"></span> · базис <span id="a-live-basis" class="num"></span>
+      </span>
     </div>
-    <p id="status-{{ key }}" class="status">—</p>
-    <div class="btn-row">
-      <button class="btn green" onclick="syncAsset('{{ key }}')">&#x2B07; Собрать</button>
-      <button class="btn blue" onclick="viewAsset('{{ key }}')">&#x1F441; Показать</button>
-      <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">📊 Доход</a>
+
+    <div class="a-hero">
+      <div class="a-hero-label">Годовая доходность (APR)
+        <span class="info-tip" data-tip="APR = средняя ставка за период × количество периодов начисления в год × 100%. Количество периодов в год считается по факту данных (медиана интервала между начислениями), а не хардкодом — поэтому может отличаться для одного и того же актива на разных биржах.">ⓘ</span>
+      </div>
+      <div class="a-hero-value num" id="a-hero-value">—</div>
+      <div class="a-hero-sub" id="a-hero-sub"></div>
     </div>
-    <div class="btn-row export-row">
-      <span class="label">↓ Excel:</span>
-      <a class="btn yellow small" href="/api/export/{{ key }}.xlsx" title="Все биржи: Raw + Annual + Monthly">Все</a>
-      {% if info.okx %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=okx" title="OKX: Raw + Annual + Monthly">OKX</a>{% endif %}
-      {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=binance" title="Binance: Raw + Annual + Monthly">Binance</a>{% endif %}
-      <a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=hyperliquid" title="Hyperliquid: Raw + Annual + Monthly">HL</a>
+
+    <div class="stat-strip" id="a-stat-strip"></div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Funding rate — вся история</span>
+        <div class="range-buttons" id="a-range-buttons">
+          <button data-range="1M">1M</button>
+          <button data-range="3M">3M</button>
+          <button data-range="6M">6M</button>
+          <button data-range="1Y">1Y</button>
+          <button data-range="ALL" class="active">Всё</button>
+        </div>
+      </div>
+      <div id="funding-chart" class="chart-box"></div>
     </div>
-    <div class="btn-row">
-      <button class="btn red small" onclick="deleteAsset('{{ key }}')">🗑 Удалить актив</button>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Симулятор накопленного дохода от фандинга</span>
+        <div class="pnl-controls">
+          <div class="pill-row" id="pnl-side-picker">
+            <button class="pill asset active" data-side="short">Шорт</button>
+            <button class="pill asset" data-side="long">Лонг</button>
+          </div>
+          <label class="pnl-notional-label">Ноционал, $
+            <input type="number" id="pnl-notional" value="10000" min="1" step="1000">
+          </label>
+          <div class="pill-row" id="pnl-fee-picker">
+            <button class="pill asset" data-fee="maker">Мейкер</button>
+            <button class="pill asset active" data-fee="taker">Тейкер</button>
+          </div>
+          <label class="pnl-notional-label">Комиссия за сделку, %
+            <input type="number" id="pnl-fee-pct" value="0.05" min="0" step="0.001">
+          </label>
+        </div>
+      </div>
+      <div class="a-hero-sub" id="pnl-summary"></div>
+      <div class="a-hero-sub" id="pnl-fee-note">Комиссия считается round-trip (вход + выход), ставки по умолчанию — ориентировочные для обычного тарифа биржи, могут отличаться от факта.</div>
+      <div id="pnl-chart" class="chart-box"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Цена актива</span>
+        <div class="range-buttons" id="price-type-buttons">
+          <button data-type="line" class="active">Линия</button>
+          <button data-type="candlestick">Свечи</button>
+        </div>
+      </div>
+      <div id="price-chart" class="chart-box"></div>
+      <div class="chart-empty" id="price-chart-empty" style="display:none">Цена по этой бирже ещё не собрана.</div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Доходность по месяцам</span>
+      </div>
+      <div class="table-scroll">
+        <table class="monthly-table" id="monthly-table"></table>
+      </div>
     </div>
   </div>
-  {% endfor %}
-  </div>
 
-  <div class="card asset-form-card" style="margin-top:1.5rem;max-width:640px">
-    <h2>➕ Добавить актив</h2>
-    <p class="subtitle">Задай ключ и название, потом добавляй тикеры по одной бирже за раз из выпадающих списков — жми «+ Добавить тикер» столько раз, сколько бирж нужно, и в конце «Сохранить».</p>
+  <details class="admin-section">
+    <summary>⚙️ Управление активами и сбором данных</summary>
+    <div class="admin-body">
+      <div class="admin-toprow">
+        <div>
+          <p class="subtitle">История ставок финансирования: OKX · Binance · Hyperliquid</p>
+          <p class="subtitle" id="auto-sync-status">⏳ Проверяю статус автосбора...</p>
+        </div>
+        <button class="btn green" id="sync-all-btn" onclick="syncAll()">▶ Собрать всё</button>
+      </div>
 
-    <div class="asset-form">
-      <label>Ключ актива (напр. SOL)<input type="text" id="af-key"></label>
-      <label>Название<input type="text" id="af-label"></label>
+      <div class="grid">
+      {% for key, info in assets.items() %}
+      <div class="card">
+        <h2>{{ info.label }}</h2>
+        <div class="badges">
+          {% if info.okx %}<span class="badge okx">OKX</span>{% endif %}
+          {% if info.binance %}<span class="badge bnb">Binance</span>{% endif %}
+          <span class="badge hl">Hyperliquid</span>
+        </div>
+        <p id="status-{{ key }}" class="status">—</p>
+        <div class="btn-row">
+          <button class="btn green" onclick="syncAsset('{{ key }}')">&#x2B07; Собрать</button>
+          <button class="btn blue" onclick="viewAsset('{{ key }}')">&#x1F441; Показать</button>
+          <a class="btn grey small" href="/api/stats/{{ key }}" target="_blank">📊 Доход</a>
+        </div>
+        <div class="btn-row export-row">
+          <span class="label">↓ Excel:</span>
+          <a class="btn yellow small" href="/api/export/{{ key }}.xlsx" title="Все биржи: Raw + Annual + Monthly">Все</a>
+          {% if info.okx %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=okx" title="OKX: Raw + Annual + Monthly">OKX</a>{% endif %}
+          {% if info.binance %}<a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=binance" title="Binance: Raw + Annual + Monthly">Binance</a>{% endif %}
+          <a class="btn yellow small" href="/api/export/{{ key }}.xlsx?exchange=hyperliquid" title="Hyperliquid: Raw + Annual + Monthly">HL</a>
+        </div>
+        <div class="btn-row">
+          <button class="btn red small" onclick="deleteAsset('{{ key }}')">🗑 Удалить актив</button>
+        </div>
+      </div>
+      {% endfor %}
+      </div>
+
+      <div class="card asset-form-card" style="margin-top:1.5rem;max-width:640px">
+        <h2>➕ Добавить актив</h2>
+        <p class="subtitle">Задай ключ и название, потом добавляй тикеры по одной бирже за раз из выпадающих списков — жми «+ Добавить тикер» столько раз, сколько бирж нужно, и в конце «Сохранить».</p>
+
+        <div class="asset-form">
+          <label>Ключ актива (напр. SOL)<input type="text" id="af-key"></label>
+          <label>Название<input type="text" id="af-label"></label>
+        </div>
+
+        <div class="ticker-picker">
+          <label>Биржа
+            <select id="af-exchange">
+              <option value="okx">OKX</option>
+              <option value="binance">Binance</option>
+              <option value="hyperliquid">Hyperliquid</option>
+            </select>
+          </label>
+          <label id="af-hl-dex-wrap" style="display:none">Dex
+            <input type="text" id="af-hl-dex" list="af-hl-dex-list" placeholder="начни вводить...">
+            <datalist id="af-hl-dex-list"></datalist>
+          </label>
+          <label>Инструмент
+            <input type="text" id="af-instrument" list="af-instrument-list" placeholder="начни вводить тикер...">
+            <datalist id="af-instrument-list"></datalist>
+          </label>
+          <button type="button" class="btn blue" id="af-add-ticker-btn">+ Добавить тикер</button>
+        </div>
+
+        <div id="af-ticker-chips" class="ticker-chips"></div>
+
+        <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>
+        <p id="asset-form-status" class="status"></p>
+      </div>
+
+      <div id="viewer" style="display:none;margin-top:2rem">
+        <h3 id="viewer-title"></h3>
+        <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>exchange</th><th>asset</th><th>symbol</th>
+              <th>datetime (UTC)</th><th>funding_rate</th>
+              <th>rate %</th><th>mark_price</th><th>premium</th>
+            </tr>
+          </thead>
+          <tbody id="trows"></tbody>
+        </table>
+        </div>
+      </div>
     </div>
-
-    <div class="ticker-picker">
-      <label>Биржа
-        <select id="af-exchange">
-          <option value="okx">OKX</option>
-          <option value="binance">Binance</option>
-          <option value="hyperliquid">Hyperliquid</option>
-        </select>
-      </label>
-      <label id="af-hl-dex-wrap" style="display:none">Dex
-        <input type="text" id="af-hl-dex" list="af-hl-dex-list" placeholder="начни вводить...">
-        <datalist id="af-hl-dex-list"></datalist>
-      </label>
-      <label>Инструмент
-        <input type="text" id="af-instrument" list="af-instrument-list" placeholder="начни вводить тикер...">
-        <datalist id="af-instrument-list"></datalist>
-      </label>
-      <button type="button" class="btn blue" id="af-add-ticker-btn">+ Добавить тикер</button>
-    </div>
-
-    <div id="af-ticker-chips" class="ticker-chips"></div>
-
-    <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>
-    <p id="asset-form-status" class="status"></p>
-  </div>
-
-  <div id="viewer" style="display:none;margin-top:2rem">
-    <h3 id="viewer-title"></h3>
-    <div style="overflow-x:auto">
-    <table>
-      <thead>
-        <tr>
-          <th>exchange</th><th>asset</th><th>symbol</th>
-          <th>datetime (UTC)</th><th>funding_rate</th>
-          <th>rate %</th><th>mark_price</th><th>premium</th>
-        </tr>
-      </thead>
-      <tbody id="trows"></tbody>
-    </table>
-    </div>
-  </div>
+  </details>
 </div>
+<script>
+  const ASSET_LABELS = {{ asset_labels_json | safe }};
+</script>
+<script src="/static/echarts.min.js"></script>
+<script src="/static/analysis.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

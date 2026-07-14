@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from collections import defaultdict
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from .config import ASSETS, DEFAULT_ASSETS, load_assets_into
@@ -51,18 +51,18 @@ templates = Jinja2Templates(directory='templates')
 
 @app.get('/', response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse(
-        'index.html', {'request': request, 'assets': ASSETS}
-    )
-
-
-@app.get('/analysis', response_class=HTMLResponse)
-async def analysis_page(request: Request):
     asset_labels_json = json.dumps({k: v['label'] for k, v in ASSETS.items()}, ensure_ascii=False)
     return templates.TemplateResponse(
-        'analysis.html',
+        'index.html',
         {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json}
     )
+
+
+@app.get('/analysis')
+async def analysis_page_redirect():
+    """Аналитика переехала на главную (Блок 15) — старые ссылки/закладки на
+    /analysis просто уводим на неё же."""
+    return RedirectResponse(url='/')
 
 
 @app.get('/api/sync-status')

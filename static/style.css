@@ -88,3 +88,18 @@ th { background: #161b22; color: #8b949e; padding: .5rem .7rem; text-align: left
 td { padding: .4rem .7rem; border-bottom: 1px solid #21262d; }
 tr:hover td { background: #1c2128; }
 #viewer h3 { margin-bottom: .8rem; color: #58a6ff; }
+
+.admin-section { margin-top: 2.5rem; border-top: 1px solid var(--border-default); padding-top: 1.5rem; }
+.admin-section summary {
+  cursor: pointer; font-size: 1rem; font-weight: 600; color: var(--text-secondary);
+  list-style: none; display: flex; align-items: center; gap: .5rem; user-select: none;
+}
+.admin-section summary::-webkit-details-marker { display: none; }
+.admin-section summary::before {
+  content: '▶'; font-size: .7rem; color: var(--text-tertiary); transition: transform .15s;
+}
+.admin-section[open] summary::before { transform: rotate(90deg); }
+.admin-section summary:hover { color: var(--text-primary); }
+.admin-body { margin-top: 1.2rem; }
+.admin-toprow { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.5rem; }
+.admin-toprow .subtitle:last-child { margin-bottom: 0; }
