@@ -326,13 +326,13 @@ async def collect(asset: str) -> list[dict]:
         try:
             rows += await _okx(c, asset)
         except Exception as e:
-            print(f'OKX error ({asset}): {e}')
+            print(f'OKX error ({asset}): {type(e).__name__}: {e}')
         try:
             rows += await _binance(c, asset)
         except Exception as e:
-            print(f'Binance error ({asset}): {e}')
+            print(f'Binance error ({asset}): {type(e).__name__}: {e}')
         try:
             rows += await _hyperliquid(c, asset)
         except Exception as e:
-            print(f'Hyperliquid error ({asset}): {e}')
+            print(f'Hyperliquid error ({asset}): {type(e).__name__}: {e}')
         return rows

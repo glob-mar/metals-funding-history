@@ -1,5 +1,6 @@
 from io import StringIO, BytesIO
 import csv
+import json
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -37,6 +38,15 @@ templates = Jinja2Templates(directory='templates')
 async def index(request: Request):
     return templates.TemplateResponse(
         'index.html', {'request': request, 'assets': ASSETS}
+    )
+
+
+@app.get('/analysis', response_class=HTMLResponse)
+async def analysis_page(request: Request):
+    asset_labels_json = json.dumps({k: v['label'] for k, v in ASSETS.items()}, ensure_ascii=False)
+    return templates.TemplateResponse(
+        'analysis.html',
+        {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json}
     )
 
 

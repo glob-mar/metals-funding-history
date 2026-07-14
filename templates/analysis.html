@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Аналитика — Funding Rate History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/analysis.css">
+</head>
+<body>
+<div class="container">
+  <div class="a-topbar">
+    <a class="btn grey small" href="/">&larr; Назад</a>
+    <h1 class="a-title">📊 Аналитика по фандингу</h1>
+  </div>
+
+  <div class="picker-row">
+    <div class="picker-group">
+      <span class="picker-label">Биржа</span>
+      <div class="pill-row" id="exchange-picker">
+        <button class="pill okx" data-exchange="okx">OKX</button>
+        <button class="pill bnb" data-exchange="binance">Binance</button>
+        <button class="pill hl" data-exchange="hyperliquid">Hyperliquid</button>
+      </div>
+    </div>
+    <div class="picker-group">
+      <span class="picker-label">Актив</span>
+      <div class="pill-row" id="asset-picker">
+      {% for key, info in assets.items() %}
+        <button class="pill asset" data-asset="{{ key }}">{{ info.label }}</button>
+      {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div id="a-loading" class="a-loading">Выбери биржу и актив.</div>
+
+  <div id="a-card" style="display:none">
+    <div class="a-header">
+      <span class="badge" id="a-badge-exchange"></span>
+      <h2 id="a-asset-label"></h2>
+      <span class="interval-tag" id="a-interval"></span>
+    </div>
+
+    <div class="a-hero">
+      <div class="a-hero-label">Годовая доходность (APR)</div>
+      <div class="a-hero-value num" id="a-hero-value">—</div>
+      <div class="a-hero-sub" id="a-hero-sub"></div>
+    </div>
+
+    <div class="stat-strip" id="a-stat-strip"></div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Funding rate — вся история</span>
+        <div class="range-buttons" id="a-range-buttons">
+          <button data-range="1M">1M</button>
+          <button data-range="3M">3M</button>
+          <button data-range="6M">6M</button>
+          <button data-range="1Y">1Y</button>
+          <button data-range="ALL" class="active">Всё</button>
+        </div>
+      </div>
+      <div id="funding-chart" class="chart-box"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Цена актива</span>
+      </div>
+      <div id="price-chart" class="chart-box"></div>
+      <div class="chart-empty" id="price-chart-empty" style="display:none">Цена по этой бирже ещё не собрана.</div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Доходность по месяцам</span>
+      </div>
+      <div class="table-scroll">
+        <table class="monthly-table" id="monthly-table"></table>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  const ASSET_LABELS = {{ asset_labels_json | safe }};
+</script>
+<script src="/static/echarts.min.js"></script>
+<script src="/static/analysis.js"></script>
+</body>
+</html>
