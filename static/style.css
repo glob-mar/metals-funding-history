@@ -61,6 +61,28 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 }
 .asset-form input:focus { outline: none; border-color: #388bfd; }
 .asset-form button { align-self: flex-start; margin-top: .3rem; }
+
+.ticker-picker { display: flex; gap: .7rem; align-items: flex-end; flex-wrap: wrap; margin: 1rem 0 .6rem; }
+.ticker-picker label { display: flex; flex-direction: column; gap: .3rem; font-size: .8rem; color: #8b949e; }
+.ticker-picker select, .ticker-picker input {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #e6edf3; padding: .5rem .6rem; font-size: .85rem; font-family: inherit; min-width: 190px;
+}
+.ticker-picker select:focus, .ticker-picker input:focus { outline: none; border-color: #388bfd; }
+.ticker-picker input:disabled { opacity: .5; cursor: not-allowed; }
+.ticker-picker button { align-self: flex-end; }
+
+.ticker-chips { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; min-height: 1.6rem; align-items: center; }
+.ticker-chip {
+  display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem;
+  background: #21262d; border: 1px solid #30363d; border-radius: 999px; padding: .3rem .5rem .3rem .7rem;
+  color: #e6edf3;
+}
+.ticker-chip code { color: #3fb950; }
+.ticker-chip button {
+  border: none; background: transparent; color: #f85149; cursor: pointer; font-size: .85rem; padding: 0 .3rem;
+}
+.ticker-chip-empty { font-size: .8rem; color: #6e7681; }
 table { width: 100%; border-collapse: collapse; font-size: .82rem; margin-top: .5rem; }
 th { background: #161b22; color: #8b949e; padding: .5rem .7rem; text-align: left; border-bottom: 1px solid #30363d; white-space: nowrap; }
 td { padding: .4rem .7rem; border-bottom: 1px solid #21262d; }

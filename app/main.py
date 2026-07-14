@@ -17,6 +17,7 @@ from .db import (
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
+from . import instruments
 from .metrics import periods_per_year, interval_label
 from .analysis import exchange_stats, monthly_table, funding_price_correlation
 from . import scheduler
@@ -82,6 +83,42 @@ async def sync_all():
 @app.get('/api/assets')
 async def list_assets():
     return JSONResponse({'ok': True, 'assets': ASSETS})
+
+
+@app.get('/api/instruments/okx')
+async def instruments_okx():
+    try:
+        return JSONResponse({'ok': True, 'items': await instruments.list_okx_instruments()})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=502)
+
+
+@app.get('/api/instruments/binance')
+async def instruments_binance():
+    try:
+        return JSONResponse({'ok': True, 'items': await instruments.list_binance_instruments()})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=502)
+
+
+@app.get('/api/instruments/hyperliquid/dexes')
+async def instruments_hyperliquid_dexes():
+    try:
+        return JSONResponse({'ok': True, 'items': await instruments.list_hyperliquid_dexes()})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=502)
+
+
+@app.get('/api/instruments/hyperliquid/coins')
+async def instruments_hyperliquid_coins(dex: str = Query(...)):
+    try:
+        return JSONResponse({'ok': True, 'items': await instruments.list_hyperliquid_coins(dex)})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=502)
 
 
 @app.post('/api/assets')

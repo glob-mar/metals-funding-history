@@ -49,18 +49,37 @@
   {% endfor %}
   </div>
 
-  <div class="card asset-form-card" style="margin-top:1.5rem;max-width:520px">
+  <div class="card asset-form-card" style="margin-top:1.5rem;max-width:640px">
     <h2>➕ Добавить актив</h2>
-    <p class="subtitle">Заполни тикеры хотя бы для одной биржи — перед сохранением каждый тикер проверяется пробным запросом к бирже.</p>
-    <form id="asset-form" class="asset-form">
-      <label>Ключ актива (напр. SOL)<input type="text" id="af-key" required></label>
-      <label>Название<input type="text" id="af-label" required></label>
-      <label>OKX instId (напр. SOL-USDT-SWAP)<input type="text" id="af-okx"></label>
-      <label>Binance symbol (напр. SOLUSDT)<input type="text" id="af-binance"></label>
-      <label>Hyperliquid dex (напр. xyz или HyperEVM)<input type="text" id="af-hl-dex"></label>
-      <label>Hyperliquid coin (для dex=xyz — напр. xyz:SOL; для нативного dex, напр. HyperEVM, — голое имя без префикса, напр. SOL)<input type="text" id="af-hl-coin"></label>
-      <button type="submit" class="btn green">Проверить и добавить</button>
-    </form>
+    <p class="subtitle">Задай ключ и название, потом добавляй тикеры по одной бирже за раз из выпадающих списков — жми «+ Добавить тикер» столько раз, сколько бирж нужно, и в конце «Сохранить».</p>
+
+    <div class="asset-form">
+      <label>Ключ актива (напр. SOL)<input type="text" id="af-key"></label>
+      <label>Название<input type="text" id="af-label"></label>
+    </div>
+
+    <div class="ticker-picker">
+      <label>Биржа
+        <select id="af-exchange">
+          <option value="okx">OKX</option>
+          <option value="binance">Binance</option>
+          <option value="hyperliquid">Hyperliquid</option>
+        </select>
+      </label>
+      <label id="af-hl-dex-wrap" style="display:none">Dex
+        <input type="text" id="af-hl-dex" list="af-hl-dex-list" placeholder="начни вводить...">
+        <datalist id="af-hl-dex-list"></datalist>
+      </label>
+      <label>Инструмент
+        <input type="text" id="af-instrument" list="af-instrument-list" placeholder="начни вводить тикер...">
+        <datalist id="af-instrument-list"></datalist>
+      </label>
+      <button type="button" class="btn blue" id="af-add-ticker-btn">+ Добавить тикер</button>
+    </div>
+
+    <div id="af-ticker-chips" class="ticker-chips"></div>
+
+    <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>
     <p id="asset-form-status" class="status"></p>
   </div>
 

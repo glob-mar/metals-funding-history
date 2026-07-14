@@ -78,21 +78,139 @@ async function syncAll() {
   }, 3000)
 }
 
+// Кэш списков инструментов на стороне клиента — сами списки почти не меняются
+// за сессию, повторный fetch при переключении биржи туда-обратно не нужен.
+const instrumentCache = {}
+let hlDexesCache = null
+
+async function loadInstrumentList(exchange) {
+  if (instrumentCache[exchange]) return instrumentCache[exchange]
+  const r = await fetch(`/api/instruments/${exchange}`)
+  const data = await r.json()
+  const items = data.ok ? data.items : []
+  instrumentCache[exchange] = items
+  return items
+}
+
+async function loadHlDexes() {
+  if (hlDexesCache) return hlDexesCache
+  const r = await fetch('/api/instruments/hyperliquid/dexes')
+  const data = await r.json()
+  hlDexesCache = data.ok ? data.items : []
+  return hlDexesCache
+}
+
+async function loadHlCoins(dex) {
+  const cacheKey = `hyperliquid:${dex}`
+  if (instrumentCache[cacheKey]) return instrumentCache[cacheKey]
+  const r = await fetch(`/api/instruments/hyperliquid/coins?dex=${encodeURIComponent(dex)}`)
+  const data = await r.json()
+  const items = data.ok ? data.items : []
+  instrumentCache[cacheKey] = items
+  return items
+}
+
+function fillDatalist(datalistEl, items) {
+  datalistEl.innerHTML = items.map(v => `<option value="${v}"></option>`).join('')
+}
+
+const assetDraft = { okx: null, binance: null, hyperliquid_dex: null, hyperliquid_coin: null }
+
+function renderTickerChips() {
+  const el = document.getElementById('af-ticker-chips')
+  if (!el) return
+  const chips = []
+  if (assetDraft.okx) chips.push({ label: 'OKX', value: assetDraft.okx, clear: () => { assetDraft.okx = null } })
+  if (assetDraft.binance) chips.push({ label: 'Binance', value: assetDraft.binance, clear: () => { assetDraft.binance = null } })
+  if (assetDraft.hyperliquid_coin) chips.push({
+    label: 'Hyperliquid', value: assetDraft.hyperliquid_coin,
+    clear: () => { assetDraft.hyperliquid_dex = null; assetDraft.hyperliquid_coin = null },
+  })
+  if (!chips.length) {
+    el.innerHTML = '<span class="ticker-chip-empty">Пока не добавлено ни одного тикера</span>'
+    return
+  }
+  el.innerHTML = chips.map((c, i) => `
+    <span class="ticker-chip">${c.label}: <code>${c.value}</code> <button type="button" data-idx="${i}">✕</button></span>
+  `).join('')
+  el.querySelectorAll('button[data-idx]').forEach((btn) => {
+    const i = parseInt(btn.dataset.idx, 10)
+    btn.addEventListener('click', () => { chips[i].clear(); renderTickerChips() })
+  })
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   loadSyncStatus()
-  const form = document.getElementById('asset-form')
-  if (!form) return
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault()
-    const statusEl = document.getElementById('asset-form-status')
-    const payload = {
-      key: document.getElementById('af-key').value,
-      label: document.getElementById('af-label').value,
-      okx: document.getElementById('af-okx').value,
-      binance: document.getElementById('af-binance').value,
-      hyperliquid_dex: document.getElementById('af-hl-dex').value,
-      hyperliquid_coin: document.getElementById('af-hl-coin').value,
+
+  const exchangeSelect = document.getElementById('af-exchange')
+  if (!exchangeSelect) return
+
+  const hlDexWrap = document.getElementById('af-hl-dex-wrap')
+  const hlDexInput = document.getElementById('af-hl-dex')
+  const hlDexDatalist = document.getElementById('af-hl-dex-list')
+  const instrumentInput = document.getElementById('af-instrument')
+  const instrumentDatalist = document.getElementById('af-instrument-list')
+
+  async function onExchangeChange() {
+    instrumentInput.value = ''
+    hlDexInput.value = ''
+    if (exchangeSelect.value === 'hyperliquid') {
+      hlDexWrap.style.display = ''
+      instrumentInput.disabled = true
+      instrumentInput.placeholder = 'сначала выбери dex'
+      fillDatalist(instrumentDatalist, [])
+      const dexes = await loadHlDexes()
+      hlDexDatalist.innerHTML = dexes.map(d => `<option value="${d.value}">${d.label}</option>`).join('')
+    } else {
+      hlDexWrap.style.display = 'none'
+      instrumentInput.disabled = false
+      instrumentInput.placeholder = 'начни вводить тикер...'
+      const items = await loadInstrumentList(exchangeSelect.value)
+      fillDatalist(instrumentDatalist, items)
     }
+  }
+  exchangeSelect.addEventListener('change', onExchangeChange)
+
+  hlDexInput.addEventListener('input', async () => {
+    const dexes = await loadHlDexes()
+    const match = dexes.find(d => d.value === hlDexInput.value)
+    if (!match) return
+    instrumentInput.disabled = false
+    instrumentInput.value = ''
+    instrumentInput.placeholder = 'начни вводить монету...'
+    const coins = await loadHlCoins(match.value)
+    fillDatalist(instrumentDatalist, coins)
+  })
+
+  document.getElementById('af-add-ticker-btn').addEventListener('click', () => {
+    const ex = exchangeSelect.value
+    const value = instrumentInput.value.trim()
+    if (!value) { alert('Выбери инструмент из списка'); return }
+    if (ex === 'hyperliquid') {
+      const dex = hlDexInput.value.trim()
+      if (!dex) { alert('Сначала выбери dex'); return }
+      assetDraft.hyperliquid_dex = dex
+      assetDraft.hyperliquid_coin = value
+    } else {
+      assetDraft[ex] = value
+    }
+    renderTickerChips()
+    instrumentInput.value = ''
+  })
+
+  document.getElementById('af-save-btn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('asset-form-status')
+    const key = document.getElementById('af-key').value.trim()
+    const label = document.getElementById('af-label').value.trim()
+    if (!key || !label) {
+      statusEl.textContent = '❌ Заполни ключ и название актива'
+      return
+    }
+    if (!assetDraft.okx && !assetDraft.binance && !assetDraft.hyperliquid_coin) {
+      statusEl.textContent = '❌ Добавь хотя бы один тикер (кнопка «+ Добавить тикер»)'
+      return
+    }
+    const payload = { key, label, ...assetDraft }
     statusEl.textContent = '⏳ Проверяю тикеры на биржах...'
     try {
       const r = await fetch('/api/assets', {
@@ -111,6 +229,9 @@ document.addEventListener('DOMContentLoaded', () => {
       statusEl.textContent = '❌ Ошибка сети: ' + e.message
     }
   })
+
+  renderTickerChips()
+  onExchangeChange()
 })
 
 async function syncAsset(asset) {
