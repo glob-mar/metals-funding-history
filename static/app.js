@@ -1,6 +1,6 @@
 async function syncAsset(asset) {
   const el = document.getElementById('status-' + asset)
-  el.textContent = '⏳ Собираю данные с бирж... это может занять 15-30 секунд'
+  el.textContent = '⏳ Собираю фандинг и цены с бирж... это может занять 20-40 секунд'
 
   try {
     const r = await fetch('/api/sync/' + asset, { method: 'POST' })
@@ -10,7 +10,7 @@ async function syncAsset(asset) {
       console.error(data.detail || data.error)
       return
     }
-    el.textContent = `✅ Готово! Получено: ${data.received}, новых в базе: ${data.new}`
+    el.textContent = `✅ Готово! Фандинг: ${data.received} (нов. ${data.new}), цены: ${data.price_received} (нов. ${data.price_new})`
   } catch (e) {
     el.textContent = '❌ Ошибка сети: ' + e.message
   }
