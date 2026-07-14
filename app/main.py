@@ -12,9 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from .config import ASSETS
 from .db import init_db, upsert_rows, get_history, upsert_price_rows, get_price_history
-from .services import collect, collect_prices
+from .services import collect, collect_prices, collect_live
 from .metrics import periods_per_year, interval_label
-from .analysis import exchange_stats, monthly_table
+from .analysis import exchange_stats, monthly_table, funding_price_correlation, hourly_heatmap
 
 EXCHANGES = ('binance', 'okx', 'hyperliquid')
 
@@ -71,6 +71,20 @@ async def sync(asset: str):
         return JSONResponse({'ok': False, 'error': str(e), 'detail': tb}, status_code=500)
 
 
+@app.get('/api/live/{asset}')
+async def live(asset: str):
+    """Живой снэпшот (не история): predicted funding + basis по всем трём биржам."""
+    asset = asset.upper()
+    if asset not in ASSETS:
+        return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
+    try:
+        data = await collect_live(asset)
+        return JSONResponse({'ok': True, 'asset': asset, 'exchanges': data})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
 @app.get('/api/price-history/{asset}')
 async def price_history(asset: str, exchange: Optional[str] = Query(None)):
     asset = asset.upper()
@@ -114,10 +128,8 @@ async def analysis(exchange: str, asset: str):
         }
 
         price_rows = await get_price_history(asset)
-        price_series = [
-            {'ts': p['ts'], 'close': p['close']}
-            for p in price_rows if p['exchange'] == exchange
-        ]
+        price_rows_ex = [p for p in price_rows if p['exchange'] == exchange]
+        price_series = [{'ts': p['ts'], 'close': p['close']} for p in price_rows_ex]
 
         funding_series = [
             {
@@ -127,13 +139,17 @@ async def analysis(exchange: str, asset: str):
             for r in rows
         ]
 
+        stats = exchange_stats(rows)
+        stats['correlation_price'] = funding_price_correlation(rows, price_rows_ex)
+
         return JSONResponse({
             'ok': True,
             'exchange': exchange,
             'asset': asset,
             'symbol': rows[0]['symbol'],
-            'stats': exchange_stats(rows),
+            'stats': stats,
             'monthly': monthly_table(rows),
+            'heatmap': hourly_heatmap(rows),
             'cross_exchange': cross_exchange,
             'funding_series': funding_series,
             'price_series': price_series,

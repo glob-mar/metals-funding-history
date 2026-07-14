@@ -43,6 +43,9 @@
       <span class="badge" id="a-badge-exchange"></span>
       <h2 id="a-asset-label"></h2>
       <span class="interval-tag" id="a-interval"></span>
+      <span class="live-tag" id="a-live-tag" style="display:none">
+        След. фандинг через <b id="a-live-countdown">—</b> · ставка <span id="a-live-rate" class="num"></span> · базис <span id="a-live-basis" class="num"></span>
+      </span>
     </div>
 
     <div class="a-hero">
@@ -82,6 +85,13 @@
       <div class="table-scroll">
         <table class="monthly-table" id="monthly-table"></table>
       </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Сезонность ставки (день недели × час UTC)</span>
+      </div>
+      <div id="heatmap-chart" class="chart-box" style="height:260px"></div>
     </div>
   </div>
 </div>

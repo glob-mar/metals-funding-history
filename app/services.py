@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 from .config import ASSETS, BINANCE_FAPI
 
@@ -296,6 +296,113 @@ async def _hyperliquid_price(client: httpx.AsyncClient, asset: str) -> list[dict
     rows.sort(key=lambda x: x['ts'])
     print(f'HL price {coin}: DONE, {len(rows)} rows')
     return rows
+
+
+OKX_FUNDING_RATE_URL = 'https://www.okx.com/api/v5/public/funding-rate'
+OKX_MARK_PRICE_URL = 'https://www.okx.com/api/v5/public/mark-price'
+OKX_INDEX_TICKER_URL = 'https://www.okx.com/api/v5/market/index-tickers'
+BINANCE_PREMIUM_INDEX = 'https://fapi.binance.com/fapi/v1/premiumIndex'
+
+
+async def _live_okx(client: httpx.AsyncClient, asset: str) -> dict | None:
+    """Predicted funding + basis (mark vs index) для OKX, живым запросом."""
+    inst = ASSETS[asset].get('okx')
+    if not inst:
+        return None
+    r1 = await client.get(OKX_FUNDING_RATE_URL, params={'instId': inst}, timeout=15.0)
+    d1 = (r1.json().get('data') or [{}])[0]
+    r2 = await client.get(OKX_MARK_PRICE_URL, params={'instType': 'SWAP', 'instId': inst}, timeout=15.0)
+    d2 = (r2.json().get('data') or [{}])[0]
+    index_inst = inst.replace('-SWAP', '')
+    r3 = await client.get(OKX_INDEX_TICKER_URL, params={'instId': index_inst}, timeout=15.0)
+    d3 = (r3.json().get('data') or [{}])[0]
+
+    mark = float(d2['markPx']) if d2.get('markPx') else None
+    index = float(d3['idxPx']) if d3.get('idxPx') else None
+    basis_pct = (mark - index) / index * 100 if mark and index else None
+    return {
+        'funding_rate_pct': float(d1['fundingRate']) * 100 if d1.get('fundingRate') else None,
+        'next_funding_time': int(d1['nextFundingTime']) if d1.get('nextFundingTime') else None,
+        'mark_price': mark,
+        'index_price': index,
+        'basis_pct': round(basis_pct, 4) if basis_pct is not None else None,
+    }
+
+
+async def _live_binance(client: httpx.AsyncClient, asset: str) -> dict | None:
+    """Predicted funding + basis (mark vs index) для Binance — всё в одном premiumIndex."""
+    symbol = ASSETS[asset].get('binance')
+    if not symbol:
+        return None
+    r = await client.get(BINANCE_PREMIUM_INDEX, params={'symbol': symbol}, timeout=15.0)
+    d = r.json()
+    mark = float(d['markPrice'])
+    index = float(d['indexPrice'])
+    basis_pct = (mark - index) / index * 100
+    return {
+        'funding_rate_pct': float(d['lastFundingRate']) * 100,
+        'next_funding_time': int(d['nextFundingTime']),
+        'mark_price': mark,
+        'index_price': index,
+        'basis_pct': round(basis_pct, 4),
+    }
+
+
+async def _live_hyperliquid(client: httpx.AsyncClient, asset: str) -> dict | None:
+    """Predicted funding + basis (mark vs oracle) для Hyperliquid.
+    dex='HyperEVM' в конфиге — это нативный perp-dex; для него параметр dex
+    в metaAndAssetCtxs нужно ОПУСТИТЬ (передача 'HyperEVM' как dex возвращает
+    null — проверено). Для HIP-3 dex (напр. 'xyz') параметр обязателен."""
+    dex = ASSETS[asset]['hyperliquid_dex']
+    coin = ASSETS[asset]['hyperliquid_coin']
+    payload = {'type': 'metaAndAssetCtxs'}
+    if dex != 'HyperEVM':
+        payload['dex'] = dex
+    r = await client.post(HL_URL, json=payload, timeout=15.0)
+    data = r.json()
+    if not isinstance(data, list):
+        return None
+    names = [u['name'] for u in data[0]['universe']]
+    if coin not in names:
+        return None
+    ctx = data[1][names.index(coin)]
+    mark = float(ctx['markPx'])
+    oracle = float(ctx['oraclePx'])
+    basis_pct = (mark - oracle) / oracle * 100
+    # HL расчёт часовой, всегда на границе часа UTC
+    now = datetime.now(tz=timezone.utc)
+    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return {
+        'funding_rate_pct': float(ctx['funding']) * 100,
+        'next_funding_time': int(next_hour.timestamp() * 1000),
+        'mark_price': mark,
+        'index_price': oracle,
+        'basis_pct': round(basis_pct, 4),
+    }
+
+
+async def collect_live(asset: str) -> dict:
+    """Живой снэпшот predicted funding + basis по всем трём биржам (не история)."""
+    timeout = httpx.Timeout(20.0)
+    headers = {'User-Agent': 'metals-funding-history/1.0'}
+    result = {}
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as c:
+        try:
+            result['okx'] = await _live_okx(c, asset)
+        except Exception as e:
+            print(f'Live OKX error ({asset}): {type(e).__name__}: {e}')
+            result['okx'] = None
+        try:
+            result['binance'] = await _live_binance(c, asset)
+        except Exception as e:
+            print(f'Live Binance error ({asset}): {type(e).__name__}: {e}')
+            result['binance'] = None
+        try:
+            result['hyperliquid'] = await _live_hyperliquid(c, asset)
+        except Exception as e:
+            print(f'Live Hyperliquid error ({asset}): {type(e).__name__}: {e}')
+            result['hyperliquid'] = None
+    return result
 
 
 async def collect_prices(asset: str) -> list[dict]:

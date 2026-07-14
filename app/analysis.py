@@ -37,6 +37,56 @@ def exchange_stats(rows: list[dict]) -> dict:
     }
 
 
+def funding_price_correlation(funding_rows: list[dict], price_rows: list[dict]) -> float | None:
+    """Корреляция Пирсона между funding rate и ценой актива по дневным средним.
+    None, если общих дней меньше 3 (расчёт не имеет смысла)."""
+    daily_funding: dict = defaultdict(list)
+    for r in funding_rows:
+        fr = r['funding_rate'] if r['funding_rate'] is not None else 0.0
+        day = datetime.fromtimestamp(r['funding_time'] / 1000, tz=timezone.utc).date()
+        daily_funding[day].append(fr)
+
+    daily_price: dict = defaultdict(list)
+    for p in price_rows:
+        day = datetime.fromtimestamp(p['ts'] / 1000, tz=timezone.utc).date()
+        daily_price[day].append(p['close'])
+
+    common_days = sorted(set(daily_funding) & set(daily_price))
+    if len(common_days) < 3:
+        return None
+
+    xs = [sum(daily_funding[d]) / len(daily_funding[d]) for d in common_days]
+    ys = [sum(daily_price[d]) / len(daily_price[d]) for d in common_days]
+
+    n = len(xs)
+    mean_x, mean_y = sum(xs) / n, sum(ys) / n
+    cov = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    var_x = sum((x - mean_x) ** 2 for x in xs)
+    var_y = sum((y - mean_y) ** 2 for y in ys)
+    if var_x == 0 or var_y == 0:
+        return None
+    return round(cov / (var_x ** 0.5 * var_y ** 0.5), 4)
+
+
+def hourly_heatmap(funding_rows: list[dict]) -> list[dict]:
+    """Средняя ставка по (день недели, час UTC) — для heatmap сезонности.
+    day: 0=Пн..6=Вс (как в datetime.weekday())."""
+    buckets: dict = defaultdict(list)
+    for r in funding_rows:
+        fr = r['funding_rate'] if r['funding_rate'] is not None else 0.0
+        dt = datetime.fromtimestamp(r['funding_time'] / 1000, tz=timezone.utc)
+        buckets[(dt.weekday(), dt.hour)].append(fr)
+    result = []
+    for (day, hour), rates in sorted(buckets.items()):
+        result.append({
+            'day': day,
+            'hour': hour,
+            'avg_rate_pct': round(sum(rates) / len(rates) * 100, 6),
+            'count': len(rates),
+        })
+    return result
+
+
 def monthly_table(rows: list[dict]) -> list[dict]:
     """Помесячная доходность для одной пары (биржа, актив): доходность за месяц —
     сумма ставок за месяц (см. Инструкцию: без домножения на 365)."""

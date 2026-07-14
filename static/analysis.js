@@ -3,6 +3,9 @@ const EXCHANGE_LABELS = { okx: 'OKX', binance: 'Binance', hyperliquid: 'Hyperliq
 const state = { exchange: 'binance', asset: 'XAU' }
 let fundingChart = null
 let priceChart = null
+let heatmapChart = null
+let liveData = null
+let lastLiveAsset = null
 
 function fmtPct(v, digits = 2) {
   if (v === null || v === undefined) return '—'
@@ -58,9 +61,68 @@ async function load() {
     loading.style.display = 'none'
     card.style.display = 'block'
     render(data)
+    if (asset !== lastLiveAsset) {
+      loadLive(asset)
+    } else {
+      renderLive()
+    }
   } catch (e) {
     loading.textContent = '❌ Ошибка сети: ' + e.message
   }
+}
+
+async function loadLive(asset) {
+  try {
+    const r = await fetch(`/api/live/${asset}`)
+    const data = await r.json()
+    if (data.ok) {
+      liveData = data
+      lastLiveAsset = asset
+    }
+  } catch (e) {
+    // Живой виджет — не критичная часть экрана, молча пропускаем сетевой сбой.
+  }
+  renderLive()
+}
+
+function renderLive() {
+  const tag = document.getElementById('a-live-tag')
+  if (!liveData || lastLiveAsset !== state.asset) {
+    tag.style.display = 'none'
+    return
+  }
+  const live = liveData.exchanges[state.exchange]
+  if (!live) {
+    tag.style.display = 'none'
+    return
+  }
+  tag.style.display = 'inline-block'
+  const rateEl = document.getElementById('a-live-rate')
+  rateEl.textContent = fmtPct(live.funding_rate_pct, 4)
+  rateEl.className = 'num ' + signClass(live.funding_rate_pct)
+  const basisEl = document.getElementById('a-live-basis')
+  basisEl.textContent = live.basis_pct === null ? '—' : fmtPct(live.basis_pct, 3)
+  basisEl.className = 'num ' + signClass(live.basis_pct)
+  updateCountdown()
+}
+
+function updateCountdown() {
+  const el = document.getElementById('a-live-countdown')
+  if (!liveData || lastLiveAsset !== state.asset) return
+  const live = liveData.exchanges[state.exchange]
+  if (!live || !live.next_funding_time) {
+    el.textContent = '—'
+    return
+  }
+  const diff = live.next_funding_time - Date.now()
+  if (diff <= 0) {
+    el.textContent = '00:00:00'
+    return
+  }
+  const h = Math.floor(diff / 3600000)
+  const m = Math.floor((diff % 3600000) / 60000)
+  const s = Math.floor((diff % 60000) / 1000)
+  el.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 function render(data) {
@@ -76,6 +138,7 @@ function render(data) {
   renderMonthlyTable(data.monthly)
   renderFundingChart(data.funding_series)
   renderPriceChart(data.price_series)
+  renderHeatmapChart(data.heatmap)
 
   if (fundingChart && priceChart && data.price_series.length) {
     fundingChart.group = 'analysis-sync'
@@ -106,11 +169,13 @@ function renderStatStrip(stats, crossExchange) {
   const spread = entries.length > 1 ? Math.max(...entries.map(e => e.y)) - Math.min(...entries.map(e => e.y)) : 0
   const spreadDetail = entries.map(e => `${EXCHANGE_LABELS[e.ex]} ${fmtPct(e.y, 1)}`).join(' · ')
 
+  const corr = stats.correlation_price
   const cards = [
     { label: 'Накопленная доходность', value: fmtPct(stats.cumulative_return_pct), sign: stats.cumulative_return_pct },
     { label: 'Волатильность ставки', value: `${stats.volatility_pct.toFixed(4)}%`, sign: 0 },
     { label: 'Спред между биржами', value: `${spread.toFixed(2)} п.п.`, sign: 0, detail: spreadDetail },
     { label: '% положительных периодов', value: `${stats.pct_positive}%`, sign: stats.pct_positive - 50 },
+    { label: 'Корреляция с ценой', value: corr === null ? 'н/д' : corr.toFixed(2), sign: corr || 0 },
   ]
 
   document.getElementById('a-stat-strip').innerHTML = cards.map(c => `
@@ -282,6 +347,50 @@ function renderPriceChart(series) {
   priceChart.setOption(priceChartOption(series))
 }
 
+const HEATMAP_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+
+function heatmapChartOption(heatmap) {
+  const hours = [...new Set(heatmap.map(h => h.hour))].sort((a, b) => a - b)
+  const data = heatmap.map(h => [hours.indexOf(h.hour), h.day, h.avg_rate_pct])
+  const values = heatmap.map(h => h.avg_rate_pct)
+  const maxAbs = Math.max(Math.abs(Math.min(...values, 0)), Math.abs(Math.max(...values, 0))) || 1
+  return {
+    backgroundColor: 'transparent',
+    animation: false,
+    grid: { left: 45, right: 20, top: 10, bottom: 20 },
+    tooltip: {
+      backgroundColor: '#161b22', borderColor: '#30363d', textStyle: { color: '#e6edf3' },
+      formatter: p => `${HEATMAP_DAYS[p.value[1]]}, ${hours[p.value[0]]}:00 UTC<br>${fmtPct(p.value[2], 5)}`,
+    },
+    xAxis: {
+      type: 'category', data: hours.map(h => `${h}:00`),
+      axisLine: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#6e7681' }, splitArea: { show: false },
+    },
+    yAxis: {
+      type: 'category', data: HEATMAP_DAYS,
+      axisLine: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#6e7681' }, splitArea: { show: false },
+    },
+    visualMap: {
+      type: 'continuous', show: false, min: -maxAbs, max: maxAbs,
+      inRange: { color: ['#f85149', '#21262d', '#3fb950'] },
+    },
+    series: [{
+      type: 'heatmap', data, itemStyle: { borderColor: '#0d1117', borderWidth: 2 },
+    }],
+  }
+}
+
+function renderHeatmapChart(heatmap) {
+  const el = document.getElementById('heatmap-chart')
+  if (!heatmapChart) heatmapChart = echarts.init(el, null, { renderer: 'canvas' })
+  if (!heatmap.length) {
+    heatmapChart.clear()
+    return
+  }
+  heatmapChart.clear()
+  heatmapChart.setOption(heatmapChartOption(heatmap))
+}
+
 function applyRange(range) {
   if (!fundingChart) return
   const now = Date.now()
@@ -312,6 +421,10 @@ document.querySelectorAll('#a-range-buttons button').forEach(btn => {
 window.addEventListener('resize', () => {
   if (fundingChart) fundingChart.resize()
   if (priceChart) priceChart.resize()
+  if (heatmapChart) heatmapChart.resize()
 })
+
+setInterval(updateCountdown, 1000)
+setInterval(() => loadLive(state.asset), 30000)
 
 setInitialSelection(state.exchange, state.asset)
