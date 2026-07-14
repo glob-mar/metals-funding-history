@@ -375,6 +375,43 @@ function startingNotional() {
   return pnlState.deposit * (pnlState.twoLegs ? 0.5 : 1) * pnlState.leverage
 }
 
+// Та же логика по периодам, что и computeSimulation (капитал так же растёт от
+// реинвеста от месяца к месяцу), но вместо одной итоговой кривой возвращает
+// сумму P&L отдельно по каждому календарному месяцу (UTC) — до комиссии,
+// комиссия разовая и по месяцам не размазывается.
+function computeMonthlyPnl(series, { deposit, leverage, twoLegs, reinvestPct, side }) {
+  const sign = side === 'short' ? 1 : -1
+  const legFactor = twoLegs ? 0.5 : 1
+  let capital = deposit
+  const monthly = {}
+  for (const p of series) {
+    const notional = capital * legFactor * leverage
+    const periodPnl = sign * notional * (p.rate_pct / 100)
+    capital += periodPnl * (reinvestPct / 100)
+    const d = new Date(p.ts)
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
+    monthly[key] = (monthly[key] || 0) + periodPnl
+  }
+  return monthly
+}
+
+const MONTH_NAMES_SHORT = { '01': 'Янв', '02': 'Фев', '03': 'Мар', '04': 'Апр', '05': 'Май', '06': 'Июн', '07': 'Июл', '08': 'Авг', '09': 'Сен', '10': 'Окт', '11': 'Ноя', '12': 'Дек' }
+
+function renderPnlMonthlyTable(monthlyPnl) {
+  const el = document.getElementById('pnl-monthly-table')
+  const keys = Object.keys(monthlyPnl).sort()
+  if (!keys.length) { el.innerHTML = ''; return }
+  let total = 0
+  const rows = keys.map(k => {
+    const [y, m] = k.split('-')
+    const v = monthlyPnl[k]
+    total += v
+    return `<tr><td>${MONTH_NAMES_SHORT[m]} ${y}</td><td class="num ${signClass(v)}">${fmtMoney(v)}</td></tr>`
+  }).join('')
+  el.innerHTML = `<thead><tr><th>Месяц</th><th>P&L (до комиссии)</th></tr></thead><tbody>${rows}` +
+    `<tr class="pnl-monthly-total"><td>Итого</td><td class="num ${signClass(total)}">${fmtMoney(total)}</td></tr></tbody>`
+}
+
 function pnlChartOption(series) {
   const data = computeSimulation(series, pnlState)
   const base = baseAxisStyle()
@@ -452,7 +489,12 @@ function renderPnlSummary() {
   const el = document.getElementById('pnl-summary')
   const periodEl = document.getElementById('pnl-period-note')
   const series = filterFromDate(currentFundingSeries, pnlState.startDate)
-  if (!series.length) { el.innerHTML = ''; periodEl.textContent = ''; return }
+  if (!series.length) {
+    el.innerHTML = ''
+    periodEl.textContent = ''
+    renderPnlMonthlyTable({})
+    return
+  }
 
   const start = new Date(series[0].ts).toISOString().slice(0, 10)
   const end = new Date(series[series.length - 1].ts).toISOString().slice(0, 10)
@@ -492,6 +534,8 @@ function renderPnlSummary() {
       ${c.detail ? `<div class="stat-detail">${c.detail}</div>` : ''}
     </div>
   `).join('')
+
+  renderPnlMonthlyTable(computeMonthlyPnl(series, pnlState))
 }
 
 function renderPnlChart() {
