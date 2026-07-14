@@ -51,9 +51,3 @@ ASSETS = {
 }
 
 BINANCE_FAPI = 'https://fapi.binance.com/fapi/v1/fundingRate'
-# Периодов в год по бирже
-PERIODS_PER_YEAR = {
-    'hyperliquid': 8760,
-    'okx':         1095,
-    'binance':     1095,
-}

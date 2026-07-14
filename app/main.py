@@ -9,9 +9,10 @@ from fastapi import FastAPI, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from .config import ASSETS, PERIODS_PER_YEAR
+from .config import ASSETS
 from .db import init_db, upsert_rows, get_history
 from .services import collect
+from .metrics import periods_per_year, interval_label
 
 
 def ms_to_dt(ms: int) -> str:
@@ -77,19 +78,22 @@ async def stats(asset: str):
             return JSONResponse({'ok': True, 'asset': asset,
                                  'message': 'Нет данных. Нажми «Собрать» сначала.'})
         by_exchange: dict = defaultdict(list)
+        by_exchange_ts: dict = defaultdict(list)
         for r in rows:
             by_exchange[r['exchange']].append(r['funding_rate'])
+            by_exchange_ts[r['exchange']].append(r['funding_time'])
         result = {'ok': True, 'asset': asset, 'total_rows': len(rows), 'by_exchange': {}}
         for exchange, rates in by_exchange.items():
             n = len(rates)
             avg = sum(rates) / n
-            ppy = PERIODS_PER_YEAR.get(exchange, 8760)
+            ppy = periods_per_year(by_exchange_ts[exchange])
             annual = avg * ppy * 100
             pos = sum(1 for r in rates if r > 0)
             neg = sum(1 for r in rates if r < 0)
             result['by_exchange'][exchange] = {
                 'periods':          n,
-                'periods_per_year': ppy,
+                'periods_per_year': round(ppy, 1),
+                'funding_interval': interval_label(ppy),
                 'avg_rate_pct':     f'{avg * 100:.6f}%',
                 'annualized_yield': f'{annual:.4f}%',
                 'max_rate_pct':     f'{max(rates) * 100:.6f}%',
@@ -201,6 +205,7 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
         annual_headers = [
             'Биржа',
             'Количество периодов',
+            'Интервал начисления',
             'Дата начала',
             'Дата окончания',
             'Дней наблюдений',
@@ -227,16 +232,20 @@ async def export_xlsx(asset: str, exchange: Optional[str] = Query(None)):
         for ex, rates in by_exchange.items():
             n = len(rates)
             avg = sum(rates) / n
-            # Правильная формула APR: средняя ставка × периодов в год
-            ppy = PERIODS_PER_YEAR.get(ex, 8760)
-            annual = avg * ppy * 100
+            # Правильная формула APR: средняя ставка × периодов в год.
+            # Периоды в год считаем по факту данных, а не хардкодом по бирже,
+            # т.к. интервал начисления зависит от конкретного инструмента
+            # (напр. на Binance большинство товарных активов — 4ч, BTC — 8ч).
             timestamps = by_exchange_ts[ex]
+            ppy = periods_per_year(timestamps)
+            annual = avg * ppy * 100
             ts_min, ts_max = min(timestamps), max(timestamps)
             days = (ts_max - ts_min) / 86400000
             pos = sum(1 for r in rates if r > 0)
             ws_annual.append([
                 ex,
                 n,
+                interval_label(ppy),
                 ms_to_dt(ts_min),
                 ms_to_dt(ts_max),
                 round(days, 2),
