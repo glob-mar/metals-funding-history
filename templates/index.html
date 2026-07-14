@@ -144,6 +144,26 @@
         <table class="monthly-table" id="monthly-table"></table>
       </div>
     </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <span class="chart-title">Сравнение активов — что было выгоднее держать</span>
+      </div>
+      <p class="subtitle" style="margin-bottom:.6rem">
+        Биржа и параметры сделки (депозит, плечо, комиссия, реинвест, дата начала) берутся из симулятора выше — выбери активы для сравнения и жми «Сравнить».
+      </p>
+      <div class="screener-checks" id="screener-asset-picker">
+      {% for key, info in assets.items() %}
+        <label class="screener-check"><input type="checkbox" value="{{ key }}" checked> {{ info.label }}</label>
+      {% endfor %}
+      </div>
+      <button type="button" class="btn blue" id="screener-run-btn">Сравнить</button>
+      <p id="screener-status" class="status"></p>
+      <div class="table-scroll" id="screener-table-wrap" style="display:none">
+        <table class="monthly-table" id="screener-table"></table>
+      </div>
+      <div id="screener-chart" class="chart-box" style="display:none"></div>
+    </div>
   </div>
 
   <details class="admin-section">

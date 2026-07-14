@@ -5,6 +5,7 @@ let currentPriceSeries = []
 let fundingChart = null
 let priceChart = null
 let pnlChart = null
+let screenerChart = null
 let liveData = null
 let lastLiveAsset = null
 let currentFundingSeries = []
@@ -724,10 +725,124 @@ document.getElementById('pnl-fee-pct').addEventListener('input', (e) => {
   document.querySelectorAll('#pnl-fee-picker .pill').forEach(b => b.classList.remove('active'))
   renderPnlChart()
 })
+// Сравнение активов ("скринер") — та же симуляция (computeSimulation),
+// что и в основном P&L-симуляторе, и те же параметры (pnlState), просто
+// прогнанная по нескольким активам сразу на текущей выбранной бирже,
+// с сортировкой по итоговому чистому P&L.
+async function fetchAssetFundingSeries(exchange, asset) {
+  try {
+    const r = await fetch(`/api/analysis/${exchange}/${asset}`)
+    const data = await r.json()
+    if (!data.ok || data.message || !data.funding_series) return null
+    return data.funding_series
+  } catch (e) {
+    return null
+  }
+}
+
+async function runScreener() {
+  const statusEl = document.getElementById('screener-status')
+  const checked = Array.from(document.querySelectorAll('#screener-asset-picker input:checked')).map(cb => cb.value)
+  if (!checked.length) {
+    statusEl.textContent = '❌ Отметь хотя бы один актив.'
+    return
+  }
+  statusEl.textContent = `⏳ Считаю по ${checked.length} активам на ${EXCHANGE_LABELS[state.exchange]}...`
+
+  const exchange = state.exchange
+  const results = await Promise.all(checked.map(async asset => {
+    const series = await fetchAssetFundingSeries(exchange, asset)
+    const filtered = series ? filterFromDate(series, pnlState.startDate) : []
+    if (!filtered.length) return { asset, ok: false }
+    const sim = computeSimulation(filtered, pnlState)
+    const gross = sim[sim.length - 1][1]
+    const notional = startingNotional()
+    const feeCost = notional * (pnlState.feePct / 100) * 2
+    return { asset, ok: true, gross, feeCost, net: gross - feeCost, notional }
+  }))
+
+  const valid = results.filter(r => r.ok).sort((a, b) => b.net - a.net)
+  const skipped = results.filter(r => !r.ok).map(r => ASSET_LABELS[r.asset] || r.asset)
+
+  statusEl.textContent = skipped.length
+    ? `Готово. Без данных на ${EXCHANGE_LABELS[exchange]}: ${skipped.join(', ')}.`
+    : `Готово (${valid.length} активов).`
+
+  renderScreenerTable(valid)
+  renderScreenerChart(valid)
+}
+
+function renderScreenerTable(rows) {
+  const wrap = document.getElementById('screener-table-wrap')
+  const el = document.getElementById('screener-table')
+  if (!rows.length) { wrap.style.display = 'none'; el.innerHTML = ''; return }
+  wrap.style.display = 'block'
+  let html = '<thead><tr><th>Актив</th><th>Ноционал</th><th>Фандинг</th><th>Комиссия</th><th>Чистый P&L</th></tr></thead><tbody>'
+  rows.forEach(r => {
+    html += `<tr>
+      <td class="asset-link" data-asset="${r.asset}">${ASSET_LABELS[r.asset] || r.asset}</td>
+      <td class="num">$${r.notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}</td>
+      <td class="num ${signClass(r.gross)}-cell">${fmtMoney(r.gross)}</td>
+      <td class="num neg-cell">−$${r.feeCost.toFixed(2)}</td>
+      <td class="num total-cell ${signClass(r.net)}-cell">${fmtMoney(r.net)}</td>
+    </tr>`
+  })
+  html += '</tbody>'
+  el.innerHTML = html
+  el.querySelectorAll('td.asset-link').forEach(td => {
+    td.addEventListener('click', () => selectAsset(td.dataset.asset))
+  })
+}
+
+function renderScreenerChart(rows) {
+  const el = document.getElementById('screener-chart')
+  if (!rows.length) {
+    el.style.display = 'none'
+    if (screenerChart) screenerChart.clear()
+    return
+  }
+  el.style.display = 'block'
+  el.style.height = Math.max(220, rows.length * 42) + 'px'
+  if (!screenerChart) screenerChart = echarts.init(el, null, { renderer: 'canvas' })
+  screenerChart.resize()
+
+  const sorted = [...rows].sort((a, b) => a.net - b.net) // по возрастанию — в ECharts категории идут снизу вверх
+  const labels = sorted.map(r => ASSET_LABELS[r.asset] || r.asset)
+  const values = sorted.map(r => r.net)
+
+  screenerChart.clear()
+  screenerChart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    grid: { left: 100, right: 40, top: 10, bottom: 20 },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      valueFormatter: v => '$' + v.toFixed(2),
+      backgroundColor: '#161b22', borderColor: '#30363d', textStyle: { color: '#e6edf3' },
+    },
+    xAxis: {
+      type: 'value', axisLine: { lineStyle: { color: '#30363d' } },
+      axisLabel: { color: '#6e7681', formatter: v => '$' + v },
+      splitLine: { lineStyle: { color: 'rgba(240,246,252,.06)' } },
+    },
+    yAxis: {
+      type: 'category', data: labels,
+      axisLine: { lineStyle: { color: '#30363d' } }, axisLabel: { color: '#e6edf3' },
+    },
+    series: [{
+      type: 'bar', barWidth: '60%',
+      data: values.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#3fb950' : '#f85149' } })),
+    }],
+  })
+}
+
+document.getElementById('screener-run-btn').addEventListener('click', runScreener)
+
 window.addEventListener('resize', () => {
   if (fundingChart) fundingChart.resize()
   if (priceChart) priceChart.resize()
   if (pnlChart) pnlChart.resize()
+  if (screenerChart) screenerChart.resize()
 })
 
 setInterval(updateCountdown, 1000)
