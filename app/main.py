@@ -1,4 +1,5 @@
 from io import StringIO, BytesIO
+import asyncio
 import csv
 import json
 import traceback
@@ -18,6 +19,7 @@ from .db import (
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from .metrics import periods_per_year, interval_label
 from .analysis import exchange_stats, monthly_table, funding_price_correlation, hourly_heatmap
+from . import scheduler
 
 EXCHANGES = ('binance', 'okx', 'hyperliquid')
 
@@ -36,7 +38,9 @@ async def lifespan(app: FastAPI):
     await init_db()
     await seed_assets_if_empty(DEFAULT_ASSETS)
     await refresh_assets_cache()
+    task = asyncio.create_task(scheduler.scheduler_loop())
     yield
+    task.cancel()
 
 
 app = FastAPI(title='Metals Funding History', lifespan=lifespan)
@@ -58,6 +62,11 @@ async def analysis_page(request: Request):
         'analysis.html',
         {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json}
     )
+
+
+@app.get('/api/sync-status')
+async def sync_status():
+    return JSONResponse({'ok': True, **scheduler.status})
 
 
 @app.get('/api/assets')

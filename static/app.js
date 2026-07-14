@@ -13,7 +13,38 @@ async function deleteAsset(asset) {
   }
 }
 
+async function loadSyncStatus() {
+  const el = document.getElementById('auto-sync-status')
+  if (!el) return
+  try {
+    const r = await fetch('/api/sync-status')
+    const data = await r.json()
+    if (!data.ok) {
+      el.textContent = '⚠️ Не удалось получить статус автосбора'
+      return
+    }
+    const every = `Автосбор каждые ${data.interval_minutes} мин.`
+    if (!data.started_at) {
+      el.textContent = `🕐 ${every} Ещё не запускался (первый проход — вскоре после старта сервера).`
+      return
+    }
+    const started = new Date(data.started_at).toLocaleString('ru-RU')
+    if (data.running) {
+      el.textContent = `⏳ ${every} Идёт сбор, начат в ${started}...`
+      return
+    }
+    const results = data.results || {}
+    const assets = Object.keys(results)
+    const ok = assets.filter(a => results[a].ok).length
+    const finished = data.finished_at ? new Date(data.finished_at).toLocaleString('ru-RU') : '—'
+    el.textContent = `✅ ${every} Последний проход: ${finished} (успешно ${ok}/${assets.length} активов)`
+  } catch (e) {
+    el.textContent = '⚠️ Ошибка сети при получении статуса автосбора'
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  loadSyncStatus()
   const form = document.getElementById('asset-form')
   if (!form) return
   form.addEventListener('submit', async (e) => {
