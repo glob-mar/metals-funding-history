@@ -1,7 +1,14 @@
+import os
 import aiosqlite
 from pathlib import Path
 
-DB_PATH = Path('data/funding.db')
+# На Railway том смонтирован по пути из RAILWAY_VOLUME_MOUNT_PATH (переменную
+# ставит сама платформа) — используем его напрямую, а не полагаемся на то,
+# что относительный путь 'data/funding.db' совпадёт с точкой монтирования
+# через текущую рабочую директорию процесса. Локально переменной нет —
+# работаем как раньше, относительно cwd.
+_volume_mount = os.environ.get('RAILWAY_VOLUME_MOUNT_PATH')
+DB_PATH = Path(_volume_mount) / 'funding.db' if _volume_mount else Path('data/funding.db')
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS funding_history (
@@ -38,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_price_asset_time
 
 async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    print(f'DB: используется файл {DB_PATH.resolve()}')
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
