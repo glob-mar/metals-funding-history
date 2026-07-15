@@ -17,6 +17,7 @@ from .db import (
     init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
+    delete_mistagged_price_rows,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -275,6 +276,19 @@ async def vantage_debug_summary():
     try:
         rows = await get_vantage_price_summary()
         return JSONResponse({'ok': True, 'count': len(rows), 'rows': rows})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.post('/api/debug/vantage-cleanup')
+async def vantage_debug_cleanup():
+    """Одноразовая чистка (Блок 26): удаляет из price_history строки, которые
+    бэкфилл ошибочно записал под asset='XAU' вместо настоящего актива —
+    баг с UKOUSD/CL-OIL/NG-C/UKOUSDft, см. Инструкцию."""
+    try:
+        deleted = await delete_mistagged_price_rows('vantage', 'XAU', 'XAUUSD')
+        return JSONResponse({'ok': True, 'deleted': deleted})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)

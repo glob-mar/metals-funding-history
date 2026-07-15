@@ -228,6 +228,19 @@ async def upsert_price_rows(rows: list[dict]) -> int:
         return db.total_changes
 
 
+async def delete_mistagged_price_rows(exchange: str, asset: str, exclude_symbol: str) -> int:
+    """Точечная чистка (Блок 26): убирает строки, ошибочно попавшие под чужой
+    asset при бэкфилле Vantage — price_history с asset='XAU', где symbol на
+    самом деле NG-C/CL-OIL/UKOUSD/UKOUSDft, а не настоящий XAUUSD."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM price_history WHERE exchange = ? AND asset = ? AND symbol != ?",
+            (exchange, asset, exclude_symbol)
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_vantage_price_summary() -> list[dict]:
     """Диагностика (Блок 26): раскладка price_history по (asset, symbol) для
     exchange='vantage' в обход ограничения asset in ASSETS у /api/price-history —
