@@ -228,6 +228,26 @@ async def upsert_price_rows(rows: list[dict]) -> int:
         return db.total_changes
 
 
+async def get_vantage_price_summary() -> list[dict]:
+    """Диагностика (Блок 26): раскладка price_history по (asset, symbol) для
+    exchange='vantage' в обход ограничения asset in ASSETS у /api/price-history —
+    чтобы видеть вообще все символы, которые реально получили историю от бэкфилла,
+    включая те ~993, для которых ещё нет актива в UI."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT asset, symbol, COUNT(*) as cnt, MIN(ts) as min_ts, MAX(ts) as max_ts
+            FROM price_history
+            WHERE exchange = 'vantage'
+            GROUP BY asset, symbol
+            ORDER BY cnt DESC
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_price_history(asset: str) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

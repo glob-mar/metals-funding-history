@@ -16,7 +16,7 @@ from .config import ASSETS, DEFAULT_ASSETS, load_assets_into
 from .db import (
     init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
-    upsert_vantage_symbols, get_vantage_symbols,
+    upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -263,6 +263,18 @@ async def price_history(asset: str, exchange: Optional[str] = Query(None)):
         if exchange:
             rows = [r for r in rows if r['exchange'] == exchange.lower()]
         return JSONResponse({'ok': True, 'asset': asset, 'count': len(rows), 'rows': rows})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.get('/api/debug/vantage-summary')
+async def vantage_debug_summary():
+    """Диагностика (Блок 26): полная раскладка price_history по (asset, symbol)
+    для exchange='vantage', включая символы без соответствующего актива в UI."""
+    try:
+        rows = await get_vantage_price_summary()
+        return JSONResponse({'ok': True, 'count': len(rows), 'rows': rows})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
