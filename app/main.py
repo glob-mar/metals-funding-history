@@ -16,6 +16,7 @@ from .config import ASSETS, DEFAULT_ASSETS, load_assets_into
 from .db import (
     init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
+    upsert_vantage_symbols, get_vantage_symbols,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -127,6 +128,37 @@ async def instruments_hyperliquid_coins(dex: str = Query(...)):
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=502)
 
 
+@app.get('/api/instruments/vantage')
+async def instruments_vantage():
+    """Список инструментов Vantage для формы добавления актива — в отличие
+    от остальных бирж, не живой запрос к API (публичного нет), а наш кэш
+    (Блок 22), который заполняет MQL5-скрипт со счёта брокера."""
+    try:
+        symbols = await get_vantage_symbols()
+        return JSONResponse({'ok': True, 'items': [s['symbol'] for s in symbols]})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.post('/api/vantage/ingest/symbols')
+async def vantage_ingest_symbols(request: Request):
+    """Приёмник для MQL5-скрипта: список всех инструментов счёта Vantage
+    и их спецификация (своп, размер лота, маржа) — наполняет vantage_symbols."""
+    if not VANTAGE_INGEST_TOKEN or request.headers.get('x-ingest-token') != VANTAGE_INGEST_TOKEN:
+        return JSONResponse({'ok': False, 'error': 'unauthorized'}, status_code=401)
+    body = await request.json()
+    rows = body.get('rows') or []
+    if not rows:
+        return JSONResponse({'ok': False, 'error': 'rows обязателен'}, status_code=400)
+    try:
+        inserted = await upsert_vantage_symbols(rows)
+        return JSONResponse({'ok': True, 'received': len(rows), 'new': inserted})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
 @app.post('/api/assets')
 async def add_asset(request: Request):
     body = await request.json()
@@ -136,6 +168,7 @@ async def add_asset(request: Request):
     binance = (body.get('binance') or '').strip() or None
     hyperliquid_dex = (body.get('hyperliquid_dex') or '').strip() or None
     hyperliquid_coin = (body.get('hyperliquid_coin') or '').strip() or None
+    vantage = (body.get('vantage') or '').strip() or None
 
     if not key or not key.replace('_', '').isalnum():
         return JSONResponse({'ok': False, 'error': 'Тикер актива обязателен и должен быть буквенно-цифровым'}, status_code=400)
@@ -143,8 +176,8 @@ async def add_asset(request: Request):
         return JSONResponse({'ok': False, 'error': 'Название актива обязательно'}, status_code=400)
     if key in ASSETS:
         return JSONResponse({'ok': False, 'error': f'Актив {key} уже существует'}, status_code=409)
-    if not any([okx, binance, hyperliquid_coin]):
-        return JSONResponse({'ok': False, 'error': 'Нужен хотя бы один тикер (OKX, Binance или Hyperliquid)'}, status_code=400)
+    if not any([okx, binance, hyperliquid_coin, vantage]):
+        return JSONResponse({'ok': False, 'error': 'Нужен хотя бы один тикер (OKX, Binance, Hyperliquid или Vantage)'}, status_code=400)
     if hyperliquid_coin and not hyperliquid_dex:
         return JSONResponse({'ok': False, 'error': 'Для Hyperliquid нужно указать dex (напр. "xyz" или "HyperEVM")'}, status_code=400)
 
@@ -154,6 +187,14 @@ async def add_asset(request: Request):
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': f'Ошибка проверки тикеров: {e}'}, status_code=502)
 
+    if vantage:
+        # Живой API для проверки тикера у Vantage недоступен (нет публичного
+        # API) — сверяем с кэшем vantage_symbols (Блок 22). Если кэш ещё
+        # пустой (скрипт списка символов ни разу не запускали), пропускаем
+        # проверку, а не блокируем добавление актива.
+        known = {s['symbol'] for s in await get_vantage_symbols()}
+        checks['vantage'] = (vantage in known) if known else True
+
     failed = [ex for ex, ok in checks.items() if not ok]
     if failed:
         return JSONResponse({
@@ -162,7 +203,7 @@ async def add_asset(request: Request):
             'checks': checks,
         }, status_code=422)
 
-    await insert_asset(key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+    await insert_asset(key, label, okx, binance, hyperliquid_dex, hyperliquid_coin, vantage)
     await refresh_assets_cache()
     return JSONResponse({'ok': True, 'asset': key, 'checks': checks})
 

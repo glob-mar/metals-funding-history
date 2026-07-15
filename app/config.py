@@ -81,6 +81,7 @@ def load_assets_into(target: dict, rows: list[dict]) -> None:
             'binance': row['binance'],
             'hyperliquid_dex': row['hyperliquid_dex'],
             'hyperliquid_coin': row['hyperliquid_coin'],
+            'vantage': row.get('vantage'),
         }
 
 

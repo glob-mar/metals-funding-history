@@ -246,6 +246,7 @@
           {% if info.okx %}<span class="badge okx">OKX</span>{% endif %}
           {% if info.binance %}<span class="badge bnb">Binance</span>{% endif %}
           <span class="badge hl">Hyperliquid</span>
+          {% if info.vantage %}<span class="badge">Vantage</span>{% endif %}
         </div>
         <p id="status-{{ key }}" class="status">—</p>
         <div class="btn-row">
@@ -277,6 +278,7 @@
               <option value="okx">OKX</option>
               <option value="binance">Binance</option>
               <option value="hyperliquid">Hyperliquid</option>
+              <option value="vantage">Vantage</option>
             </select>
           </label>
           <label id="af-hl-dex-wrap" style="display:none">Dex

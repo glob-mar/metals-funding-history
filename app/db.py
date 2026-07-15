@@ -1,4 +1,5 @@
 import os
+import time
 import aiosqlite
 from pathlib import Path
 
@@ -50,6 +51,17 @@ CREATE TABLE IF NOT EXISTS assets (
     hyperliquid_dex  TEXT,
     hyperliquid_coin TEXT
 );
+
+CREATE TABLE IF NOT EXISTS vantage_symbols (
+    symbol         TEXT    PRIMARY KEY,
+    swap_long      REAL,
+    swap_short     REAL,
+    swap_mode      INTEGER,
+    contract_size  REAL,
+    margin_initial REAL,
+    digits         INTEGER,
+    updated_at     INTEGER NOT NULL
+);
 """
 
 
@@ -58,6 +70,12 @@ async def init_db():
     print(f'DB: используется файл {DB_PATH.resolve()}')
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
+        # ALTER TABLE ADD COLUMN — для БД, созданных до Блока 22, у которых
+        # assets ещё нет колонки vantage (CREATE TABLE IF NOT EXISTS её не добавит).
+        cur = await db.execute("PRAGMA table_info(assets)")
+        cols = {row[1] for row in await cur.fetchall()}
+        if 'vantage' not in cols:
+            await db.execute("ALTER TABLE assets ADD COLUMN vantage TEXT")
         await db.commit()
 
 
@@ -88,7 +106,7 @@ async def get_all_assets() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """
-            SELECT key, label, okx, binance, hyperliquid_dex, hyperliquid_coin
+            SELECT key, label, okx, binance, hyperliquid_dex, hyperliquid_coin, vantage
             FROM assets ORDER BY id ASC
             """
         )
@@ -97,16 +115,56 @@ async def get_all_assets() -> list[dict]:
 
 
 async def insert_asset(key: str, label: str, okx: str | None, binance: str | None,
-                        hyperliquid_dex: str | None, hyperliquid_coin: str | None) -> None:
+                        hyperliquid_dex: str | None, hyperliquid_coin: str | None,
+                        vantage: str | None = None) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO assets (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO assets (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin, vantage)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin)
+            (key, label, okx, binance, hyperliquid_dex, hyperliquid_coin, vantage)
         )
         await db.commit()
+
+
+async def upsert_vantage_symbols(rows: list[dict]) -> int:
+    """Кэш списка инструментов счёта Vantage + их спецификация (Блок 22) —
+    обновляется MQL5-скриптом по запуску, не в реальном времени. Источник
+    для выпадающего списка в форме добавления актива (как instruments.py
+    для остальных бирж, только пуллом с их API, а не пушем от терминала)."""
+    if not rows:
+        return 0
+    sql = """
+    INSERT INTO vantage_symbols (symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(symbol) DO UPDATE SET
+        swap_long = excluded.swap_long, swap_short = excluded.swap_short, swap_mode = excluded.swap_mode,
+        contract_size = excluded.contract_size, margin_initial = excluded.margin_initial,
+        digits = excluded.digits, updated_at = excluded.updated_at
+    """
+    now_ms = int(time.time() * 1000)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(sql, [
+            (r['symbol'], r.get('swap_long'), r.get('swap_short'), r.get('swap_mode'),
+             r.get('contract_size'), r.get('margin_initial'), r.get('digits'), now_ms)
+            for r in rows
+        ])
+        await db.commit()
+        return db.total_changes
+
+
+async def get_vantage_symbols() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at
+            FROM vantage_symbols ORDER BY symbol ASC
+            """
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
 
 async def delete_asset(key: str) -> int:

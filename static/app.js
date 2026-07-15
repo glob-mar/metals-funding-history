@@ -114,7 +114,7 @@ function fillDatalist(datalistEl, items) {
   datalistEl.innerHTML = items.map(v => `<option value="${v}"></option>`).join('')
 }
 
-const assetDraft = { okx: null, binance: null, hyperliquid_dex: null, hyperliquid_coin: null }
+const assetDraft = { okx: null, binance: null, hyperliquid_dex: null, hyperliquid_coin: null, vantage: null }
 
 // Ключ и название актива больше не вводятся руками — выводятся из первого
 // добавленного тикера (пользователь путался, зачем вообще эти два поля,
@@ -126,6 +126,7 @@ function deriveDraftKey() {
     const i = assetDraft.hyperliquid_coin.indexOf(':')
     return i >= 0 ? assetDraft.hyperliquid_coin.slice(i + 1) : assetDraft.hyperliquid_coin
   }
+  if (assetDraft.vantage) return assetDraft.vantage.replace(/USD$/, '')
   return null
 }
 
@@ -139,6 +140,7 @@ function renderTickerChips() {
     label: 'Hyperliquid', value: assetDraft.hyperliquid_coin,
     clear: () => { assetDraft.hyperliquid_dex = null; assetDraft.hyperliquid_coin = null },
   })
+  if (assetDraft.vantage) chips.push({ label: 'Vantage', value: assetDraft.vantage, clear: () => { assetDraft.vantage = null } })
 
   const keyEl = document.getElementById('af-derived-key')
   if (keyEl) {
@@ -195,7 +197,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       hlDexWrap.style.display = 'none'
       instrumentInput.disabled = false
-      instrumentInput.placeholder = 'начни вводить тикер...'
+      instrumentInput.placeholder = exchangeSelect.value === 'vantage'
+        ? 'начни вводить тикер (список со времени последнего запуска скрипта в терминале)...'
+        : 'начни вводить тикер...'
       const items = await loadInstrumentList(exchangeSelect.value)
       fillDatalist(instrumentDatalist, items)
     }
