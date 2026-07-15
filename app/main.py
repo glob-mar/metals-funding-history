@@ -2,6 +2,7 @@ from io import StringIO, BytesIO
 import asyncio
 import csv
 import json
+import os
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -23,6 +24,11 @@ from .analysis import exchange_stats, monthly_table, funding_price_correlation
 from . import scheduler
 
 EXCHANGES = ('binance', 'okx', 'hyperliquid')
+
+# Общий секрет для приёма данных от MQL5-скрипта на терминале Vantage (Блок 22) —
+# задаётся в окружении (локально export, на Railway — переменная окружения проекта),
+# не хранится в коде и не коммитится.
+VANTAGE_INGEST_TOKEN = os.environ.get('VANTAGE_INGEST_TOKEN')
 
 
 def ms_to_dt(ms: int) -> str:
@@ -216,6 +222,36 @@ async def price_history(asset: str, exchange: Optional[str] = Query(None)):
         if exchange:
             rows = [r for r in rows if r['exchange'] == exchange.lower()]
         return JSONResponse({'ok': True, 'asset': asset, 'count': len(rows), 'rows': rows})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.post('/api/vantage/ingest/prices')
+async def vantage_ingest_prices(request: Request):
+    """Приёмник для MQL5-скрипта на терминале Vantage (Блок 22): шлёт сюда
+    OHLC-свечи через WebRequest(). 'vantage' пока не зарегистрирован как
+    источник в UI (EXCHANGES/ASSETS) — это только приём и накопление данных
+    в price_history, показ на фронтенде подключим отдельным шагом."""
+    if not VANTAGE_INGEST_TOKEN or request.headers.get('x-ingest-token') != VANTAGE_INGEST_TOKEN:
+        return JSONResponse({'ok': False, 'error': 'unauthorized'}, status_code=401)
+    body = await request.json()
+    asset = (body.get('asset') or '').strip().upper()
+    symbol = (body.get('symbol') or '').strip()
+    rows = body.get('rows') or []
+    if not asset or not symbol or not rows:
+        return JSONResponse({'ok': False, 'error': 'asset, symbol и rows обязательны'}, status_code=400)
+    try:
+        price_rows = [
+            {
+                'exchange': 'vantage', 'asset': asset, 'symbol': symbol,
+                'ts': r['ts'], 'open': r.get('open'), 'high': r.get('high'),
+                'low': r.get('low'), 'close': r['close'], 'price_type': r.get('price_type', 'bid'),
+            }
+            for r in rows
+        ]
+        inserted = await upsert_price_rows(price_rows)
+        return JSONResponse({'ok': True, 'asset': asset, 'symbol': symbol, 'received': len(rows), 'new': inserted})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
