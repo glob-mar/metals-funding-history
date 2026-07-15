@@ -2,6 +2,7 @@ const EXCHANGE_LABELS = { okx: 'OKX', binance: 'Binance', hyperliquid: 'Hyperliq
 
 const state = { exchange: 'binance', asset: 'XAU', priceChartType: 'line' }
 let currentPriceSeries = []
+let currentVantageSeries = []
 let fundingChart = null
 let priceChart = null
 let pnlChart = null
@@ -102,6 +103,7 @@ async function load() {
     }
     loading.style.display = 'none'
     card.style.display = 'block'
+    data.vantage_price_series = await loadVantagePriceSeries(asset)
     render(data)
     if (asset !== lastLiveAsset) {
       loadLive(asset)
@@ -110,6 +112,21 @@ async function load() {
     }
   } catch (e) {
     loading.textContent = '❌ Ошибка сети: ' + e.message
+  }
+}
+
+// Цена с Vantage (MT5, Блок 22) — накапливается отдельным MQL5-скриптом,
+// показываем как оверлей поверх цены выбранной крипто-биржи, чтобы видеть
+// расхождение/схождение (ролловер). Для большинства активов данных ещё
+// нет — тогда пустой массив, и оверлей просто не рисуется.
+async function loadVantagePriceSeries(asset) {
+  try {
+    const r = await fetch(`/api/price-history/${asset}?exchange=vantage`)
+    const data = await r.json()
+    if (!data.ok) return []
+    return data.rows.map(p => ({ ts: p.ts, close: p.close })).sort((a, b) => a.ts - b.ts)
+  } catch (e) {
+    return []
   }
 }
 
@@ -184,7 +201,7 @@ function render(data) {
   syncFeePreset()
   syncPnlDateRange(data.funding_series)
   renderPnlChart()
-  renderPriceChart(data.price_series)
+  renderPriceChart(data.price_series, data.vantage_price_series || [])
 
   if (fundingChart && priceChart && data.price_series.length) {
     fundingChart.group = 'analysis-sync'
@@ -602,11 +619,18 @@ function candlestickChartOption(series, base) {
     grid: { left: 55, right: 20, top: 20, bottom: 20 },
     tooltip: {
       ...base.tooltip,
+      // params — массив по всем сериям в этой точке X (candlestick + опционально
+      // Vantage-оверлей), а не одна свеча, поэтому ищем каждую по seriesType/name.
       formatter: params => {
-        const p = params[0]
-        const [, o, c, l, h] = p.value
-        return `${new Date(p.value[0]).toLocaleString('ru-RU')}<br>` +
-          `Откр: ${o}<br>Закр: ${c}<br>Мин: ${l}<br>Макс: ${h}`
+        const candle = params.find(p => p.seriesType === 'candlestick')
+        let html = ''
+        if (candle) {
+          const [ts, o, c, l, h] = candle.value
+          html += `${new Date(ts).toLocaleString('ru-RU')}<br>Откр: ${o}<br>Закр: ${c}<br>Мин: ${l}<br>Макс: ${h}`
+        }
+        const vantage = params.find(p => p.seriesName === 'Vantage')
+        if (vantage) html += `<br><span style="color:#58a6ff">●</span> Vantage: ${vantage.value[1]}`
+        return html
       },
     },
     xAxis: base.xAxis,
@@ -622,18 +646,36 @@ function candlestickChartOption(series, base) {
   }
 }
 
-function priceChartOption(series) {
+// vantageSeries — цена с Vantage (Блок 22), оверлей поверх цены крипто-биржи
+// для сравнения расхождения/схождения (ролловер). Пусто — не рисуем совсем.
+function priceChartOption(series, vantageSeries = []) {
   const base = baseAxisStyle()
   const common = { backgroundColor: 'transparent', animation: false }
-  return state.priceChartType === 'candlestick'
-    ? { ...common, ...candlestickChartOption(series, base) }
-    : { ...common, ...lineChartOption(series, base) }
+  const mainOption = state.priceChartType === 'candlestick'
+    ? candlestickChartOption(series, base)
+    : lineChartOption(series, base)
+
+  mainOption.series[0].name = state.priceChartType === 'candlestick'
+    ? 'Цена' : (EXCHANGE_LABELS[state.exchange] || state.exchange)
+
+  if (vantageSeries.length) {
+    mainOption.series.push({
+      name: 'Vantage', type: 'line', data: vantageSeries.map(p => [p.ts, p.close]),
+      showSymbol: false, lineStyle: { width: 1.3, color: '#58a6ff' }, z: 5,
+    })
+    mainOption.legend = {
+      data: mainOption.series.map(s => s.name),
+      textStyle: { color: '#8b949e' }, top: 0, right: 10, itemWidth: 14, itemHeight: 8,
+    }
+  }
+  return { ...common, ...mainOption }
 }
 
-function renderPriceChart(series) {
+function renderPriceChart(series, vantageSeries = []) {
   const el = document.getElementById('price-chart')
   const empty = document.getElementById('price-chart-empty')
   currentPriceSeries = series
+  currentVantageSeries = vantageSeries
   if (!priceChart) priceChart = echarts.init(el, null, { renderer: 'canvas' })
   if (!series.length) {
     // Отключаем от группы синхронизации, пока график скрыт — иначе connect()
@@ -647,7 +689,7 @@ function renderPriceChart(series) {
   el.style.display = 'block'
   empty.style.display = 'none'
   priceChart.clear()
-  priceChart.setOption(priceChartOption(series))
+  priceChart.setOption(priceChartOption(series, vantageSeries))
 }
 
 function applyRange(range) {
@@ -682,7 +724,7 @@ document.querySelectorAll('#price-type-buttons button').forEach(btn => {
     document.querySelectorAll('#price-type-buttons button').forEach(b => b.classList.remove('active'))
     btn.classList.add('active')
     state.priceChartType = btn.dataset.type
-    if (currentPriceSeries.length) renderPriceChart(currentPriceSeries)
+    if (currentPriceSeries.length) renderPriceChart(currentPriceSeries, currentVantageSeries)
   })
 })
 document.querySelectorAll('#pnl-side-picker .pill').forEach(btn => {
