@@ -5,6 +5,7 @@ let currentPriceSeries = []
 let currentVantageSeries = []
 let fundingChart = null
 let priceChart = null
+let basisChart = null
 let pnlChart = null
 let screenerChart = null
 let liveData = null
@@ -130,6 +131,40 @@ async function loadVantagePriceSeries(asset) {
   }
 }
 
+// Базис (Блок 27/30) — разница цены Vantage к цене крипто-биржи в % от
+// последней. Ряды разной плотности (крипто — свечи раз в 4-8ч, Vantage — H1),
+// поэтому для каждой точки крипто-цены ищем ближайшую по времени точку
+// Vantage; за пределами допуска (половина шага крипто-свечи) сопоставление
+// не имеет смысла — точки из разных дней, пропускаем. Оба ряда уже
+// отсортированы по ts (loadVantagePriceSeries/price_series с сервера), поэтому
+// указатель j только двигается вперёд — O(n+m), не квадратично.
+const BASIS_MATCH_TOLERANCE_MS = 3 * 3600 * 1000
+
+function computeBasisSeries(cryptoSeries, vantageSeries) {
+  if (!cryptoSeries.length || !vantageSeries.length) return []
+  const result = []
+  let j = 0
+  for (const p of cryptoSeries) {
+    while (j < vantageSeries.length - 1 && Math.abs(vantageSeries[j + 1].ts - p.ts) <= Math.abs(vantageSeries[j].ts - p.ts)) j++
+    const nearest = vantageSeries[j]
+    if (p.close && Math.abs(nearest.ts - p.ts) <= BASIS_MATCH_TOLERANCE_MS) {
+      result.push({ ts: p.ts, basis_pct: (nearest.close - p.close) / p.close * 100 })
+    }
+  }
+  return result
+}
+
+function renderBasisSummary(series) {
+  const el = document.getElementById('basis-summary')
+  if (!series.length) { el.textContent = ''; return }
+  const values = series.map(p => p.basis_pct)
+  const avg = values.reduce((a, b) => a + b, 0) / values.length
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const last = values[values.length - 1]
+  el.textContent = `Сейчас: ${fmtPct(last, 3)} · Средний: ${fmtPct(avg, 3)} · Диапазон: ${fmtPct(min, 3)} … ${fmtPct(max, 3)} · ${series.length} точек сопоставления`
+}
+
 async function loadLive(asset) {
   try {
     const r = await fetch(`/api/live/${asset}`)
@@ -190,6 +225,7 @@ function render(data) {
   // другого графика во время обновления и упасть с "reading 'coord'".
   if (fundingChart) fundingChart.group = ''
   if (priceChart) priceChart.group = ''
+  if (basisChart) basisChart.group = ''
 
   renderHeader(data)
   renderHero(data.stats)
@@ -203,9 +239,13 @@ function render(data) {
   renderPnlChart()
   renderPriceChart(data.price_series, data.vantage_price_series || [])
 
+  const basisSeries = computeBasisSeries(data.price_series, data.vantage_price_series || [])
+  renderBasisChart(basisSeries)
+
   if (fundingChart && priceChart && data.price_series.length) {
     fundingChart.group = 'analysis-sync'
     priceChart.group = 'analysis-sync'
+    if (basisChart && basisSeries.length) basisChart.group = 'analysis-sync'
     echarts.connect('analysis-sync')
   }
 }
@@ -704,6 +744,69 @@ function applyRange(range) {
   // уходит в рекурсию (Maximum call stack size exceeded).
   fundingChart.dispatchAction(action)
   if (priceChart) priceChart.dispatchAction(action)
+  if (basisChart) basisChart.dispatchAction(action)
+}
+
+// Базис (Блок 27/30) — та же диагональная заливка/линия по знаку, что и у
+// funding-графика (divergingGradient), но цвета взяты из уже устоявшейся
+// палитры цена-графика: синий — цвет линии Vantage, янтарный — цвет линии
+// цены крипто-биржи (priceChartOption/lineChartOption) — так цвет базиса
+// интуитивно читается как «в какую сторону сейчас цена Vantage смещена».
+function basisChartOption(series) {
+  const data = series.map(p => [p.ts, p.basis_pct])
+  const base = baseAxisStyle()
+  const values = series.map(p => p.basis_pct)
+  const dataMax = Math.max(...values, 0)
+  const dataMin = Math.min(...values, 0)
+  const pad = (dataMax - dataMin) * 0.1 || 1
+  const axisMax = dataMax + pad
+  const axisMin = dataMin - pad
+  const lineColor = divergingGradient(axisMin, axisMax, '#58a6ff', '#d29922')
+  const areaColor = divergingGradient(axisMin, axisMax, 'rgba(88,166,255,.2)', 'rgba(210,153,34,.2)')
+
+  return {
+    backgroundColor: 'transparent',
+    animation: false,
+    grid: { left: 55, right: 20, top: 20, bottom: 20 },
+    tooltip: { ...base.tooltip, valueFormatter: v => (v > 0 ? '+' : '') + v.toFixed(3) + '%' },
+    xAxis: base.xAxis,
+    yAxis: {
+      ...base.yAxis, scale: false, min: axisMin, max: axisMax,
+      axisLabel: {
+        ...base.yAxis.axisLabel, formatter: v => v.toFixed(2) + '%',
+        showMinLabel: false, showMaxLabel: false,
+      },
+    },
+    dataZoom: [{ type: 'inside' }],
+    series: [{
+      type: 'line', data, showSymbol: false, lineStyle: { width: 1.3, color: lineColor },
+      areaStyle: { color: areaColor },
+      progressive: 0,
+      markLine: {
+        symbol: 'none', silent: true, animation: false,
+        lineStyle: { color: '#484f58', type: 'dashed' },
+        data: [{ yAxis: 0 }], label: { show: false },
+      },
+    }],
+  }
+}
+
+function renderBasisChart(series) {
+  const el = document.getElementById('basis-chart')
+  const empty = document.getElementById('basis-chart-empty')
+  if (!basisChart) basisChart = echarts.init(el, null, { renderer: 'canvas' })
+  renderBasisSummary(series)
+  if (!series.length) {
+    basisChart.group = ''
+    basisChart.clear()
+    el.style.display = 'none'
+    empty.style.display = 'block'
+    return
+  }
+  el.style.display = 'block'
+  empty.style.display = 'none'
+  basisChart.clear()
+  basisChart.setOption(basisChartOption(series))
 }
 
 document.querySelectorAll('#exchange-picker .pill').forEach(btn => {
@@ -986,6 +1089,7 @@ document.getElementById('screener-run-btn').addEventListener('click', runScreene
 window.addEventListener('resize', () => {
   if (fundingChart) fundingChart.resize()
   if (priceChart) priceChart.resize()
+  if (basisChart) basisChart.resize()
   if (pnlChart) pnlChart.resize()
   if (screenerChart) screenerChart.resize()
 })

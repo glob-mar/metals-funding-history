@@ -138,6 +138,17 @@
 
     <div class="chart-card">
       <div class="chart-card-header">
+        <span class="chart-title">Базис: Vantage vs крипто-биржа
+          <span class="info-tip" data-tip="Разница между ценой на Vantage (форекс/CFD) и ценой на выбранной крипто-бирже, в % от цены крипто-биржи. У нефти/газа Vantage — это CFD на конкретный фьючерсный контракт с ежемесячной экспирацией, поэтому базис плавает в течение месяца и должен сходиться к нулю ближе к ролловеру — этот график и нужен, чтобы увидеть момент схождения. Точки сопоставлены по ближайшему времени (данные Vantage — часовые, крипто-биржи — раз в 4-8 часов).">ⓘ</span>
+        </span>
+      </div>
+      <div class="a-hero-sub" id="basis-summary"></div>
+      <div id="basis-chart" class="chart-box"></div>
+      <div class="chart-empty" id="basis-chart-empty" style="display:none">Нет сопоставимых данных Vantage для этого актива.</div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-card-header">
         <span class="chart-title">Доходность по месяцам</span>
       </div>
       <div class="table-scroll">
