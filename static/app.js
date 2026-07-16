@@ -220,12 +220,18 @@ document.addEventListener('DOMContentLoaded', () => {
     instrumentInput.value = ''
   })
 
-  document.getElementById('af-save-btn').addEventListener('click', async () => {
-    const statusEl = document.getElementById('asset-form-status')
+  // Общая логика сохранения (Блок 33) — раньше жила только в обработчике
+  // af-save-btn и всегда перезагружала страницу. Вынесена отдельно, чтобы
+  // «Сохранить и добавить ещё» могла переиспользовать ту же проверку/запрос,
+  // но без перезагрузки — иначе выбор второго тикера с той же биржи до
+  // сохранения затирал первый в assetDraft (там один слот на биржу), и
+  // добавить несколько разных активов подряд можно было только по одному,
+  // каждый раз пересобирая форму с нуля после reload.
+  async function saveDraftAsset(statusEl) {
     const key = deriveDraftKey()
     if (!key) {
       statusEl.textContent = '❌ Добавь хотя бы один тикер (кнопка «+ Добавить тикер»)'
-      return
+      return null
     }
     const payload = { key, label: key, ...assetDraft }
     statusEl.textContent = '⏳ Проверяю тикеры на биржах...'
@@ -238,13 +244,44 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await r.json()
       if (!data.ok) {
         statusEl.textContent = '❌ ' + (data.error || 'неизвестная ошибка')
-        return
+        return null
       }
-      statusEl.textContent = `✅ Актив ${data.asset} добавлен, перезагружаю страницу...`
-      setTimeout(() => location.reload(), 700)
+      return data.asset
     } catch (e) {
       statusEl.textContent = '❌ Ошибка сети: ' + e.message
+      return null
     }
+  }
+
+  function resetDraftForm() {
+    assetDraft.okx = null; assetDraft.binance = null
+    assetDraft.hyperliquid_dex = null; assetDraft.hyperliquid_coin = null
+    assetDraft.vantage = null
+    instrumentInput.value = ''
+    renderTickerChips()
+  }
+
+  document.getElementById('af-save-btn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('asset-form-status')
+    const asset = await saveDraftAsset(statusEl)
+    if (!asset) return
+    statusEl.textContent = `✅ Актив ${asset} добавлен, перезагружаю страницу...`
+    setTimeout(() => location.reload(), 700)
+  })
+
+  document.getElementById('af-save-continue-btn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('asset-form-status')
+    const asset = await saveDraftAsset(statusEl)
+    if (!asset) return
+    statusEl.textContent = ''
+    const logEl = document.getElementById('af-session-log')
+    const reloadRow = logEl.querySelector('.af-log-reload')
+    if (reloadRow) reloadRow.remove()
+    logEl.insertAdjacentHTML('beforeend', `<div class="af-log-row ok">✅ ${asset} добавлен</div>`)
+    logEl.insertAdjacentHTML('beforeend',
+      '<div class="af-log-row af-log-reload">Добавленные тут активы появятся в списке выше и в пикерах после обновления страницы — <a href="#" id="af-reload-link">обновить сейчас</a>, когда закончишь добавлять.</div>')
+    document.getElementById('af-reload-link').addEventListener('click', (e) => { e.preventDefault(); location.reload() })
+    resetDraftForm()
   })
 
   renderTickerChips()

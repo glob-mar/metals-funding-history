@@ -293,7 +293,7 @@
 
       <div class="card asset-form-card" style="margin-top:1.5rem;max-width:640px">
         <h2>➕ Добавить актив</h2>
-        <p class="subtitle">Выбери биржу и инструмент из списка и жми «+ Добавить тикер» — название актива подставится само. Повтори для остальных бирж, где он есть, и нажми «Сохранить».</p>
+        <p class="subtitle">Выбери биржу и инструмент из списка и жми «+ Добавить тикер» — название актива подставится само. Если у актива есть тикеры на нескольких биржах — повтори для них тоже (до сохранения), это один и тот же актив. Чтобы добавить НЕСКОЛЬКО РАЗНЫХ активов подряд — жми «Сохранить и добавить ещё»: страница не перезагрузится, форма очистится и сразу готова к следующему.</p>
 
         <div class="ticker-picker">
           <label>Биржа
@@ -317,8 +317,12 @@
         <p id="af-derived-key" class="status">Актив появится здесь после первого добавленного тикера.</p>
         <div id="af-ticker-chips" class="ticker-chips"></div>
 
-        <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>
+        <div class="ticker-picker">
+          <button type="button" class="btn green" id="af-save-btn">Проверить и сохранить актив</button>
+          <button type="button" class="btn blue" id="af-save-continue-btn">Сохранить и добавить ещё</button>
+        </div>
         <p id="asset-form-status" class="status"></p>
+        <div id="af-session-log"></div>
       </div>
 
       <div id="viewer" style="display:none;margin-top:2rem">
