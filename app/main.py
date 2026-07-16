@@ -3,6 +3,7 @@ import asyncio
 import csv
 import json
 import os
+import time
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -31,6 +32,13 @@ EXCHANGES = ('binance', 'okx', 'hyperliquid')
 # задаётся в окружении (локально export, на Railway — переменная окружения проекта),
 # не хранится в коде и не коммитится.
 VANTAGE_INGEST_TOKEN = os.environ.get('VANTAGE_INGEST_TOKEN')
+
+# Кэш-бастер для статики (Блок 30) — без него браузер после деплоя может
+# продолжать использовать старый закэшированный analysis.js/style.css, и
+# новый код на странице просто не появляется (молча, без видимой ошибки —
+# как и произошло с графиком базиса). RAILWAY_GIT_COMMIT_SHA меняется на
+# каждый деплой; локально (переменной нет) — берём время старта процесса.
+ASSET_VERSION = os.environ.get('RAILWAY_GIT_COMMIT_SHA', str(int(time.time())))[:8]
 
 
 def ms_to_dt(ms: int) -> str:
@@ -62,7 +70,7 @@ async def index(request: Request):
     asset_labels_json = json.dumps({k: v['label'] for k, v in ASSETS.items()}, ensure_ascii=False)
     return templates.TemplateResponse(
         'index.html',
-        {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json}
+        {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json, 'v': ASSET_VERSION}
     )
 
 

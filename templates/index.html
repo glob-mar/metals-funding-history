@@ -7,8 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
-<link rel="stylesheet" href="/static/analysis.css">
+<link rel="stylesheet" href="/static/style.css?v={{ v }}">
+<link rel="stylesheet" href="/static/analysis.css?v={{ v }}">
 </head>
 <body>
 <div class="container">
@@ -330,8 +330,8 @@
 <script>
   const ASSET_LABELS = {{ asset_labels_json | safe }};
 </script>
-<script src="/static/echarts.min.js"></script>
-<script src="/static/analysis.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/echarts.min.js?v={{ v }}"></script>
+<script src="/static/analysis.js?v={{ v }}"></script>
+<script src="/static/app.js?v={{ v }}"></script>
 </body>
 </html>
