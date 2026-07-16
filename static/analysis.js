@@ -146,6 +146,28 @@ async function loadVantagePriceSeries(asset) {
 // указатель j только двигается вперёд — O(n+m), не квадратично.
 const BASIS_MATCH_TOLERANCE_MS = 3 * 3600 * 1000
 
+// Фильтр по дате начала для базиса (Блок 30) — нужен, чтобы отрезать шум
+// молодого листинга (например, у NATGAS на Hyperliquid базис в первые пару
+// месяцев зашкаливает не из-за реального ролловера, а из-за тонкого рынка
+// при только что появившемся перпетуале). Сбрасывается на полную историю
+// при каждой смене биржи/актива — та же схема, что и syncPnlDateRange.
+let basisStartDate = null
+
+function syncBasisDateRange(series) {
+  const input = document.getElementById('basis-start-date')
+  basisStartDate = null
+  if (!series.length) { input.value = ''; input.min = ''; input.max = ''; return }
+  const minDate = new Date(series[0].ts).toISOString().slice(0, 10)
+  const maxDate = new Date(series[series.length - 1].ts).toISOString().slice(0, 10)
+  input.min = minDate
+  input.max = maxDate
+  input.value = minDate
+}
+
+function computeFilteredBasisSeries() {
+  return computeBasisSeries(filterFromDate(currentPriceSeries, basisStartDate), currentVantageSeries)
+}
+
 function computeBasisSeries(cryptoSeries, vantageSeries) {
   if (!cryptoSeries.length || !vantageSeries.length) return []
   const result = []
@@ -245,7 +267,8 @@ function render(data) {
   renderPnlChart()
   renderPriceChart(data.price_series, data.vantage_price_series || [])
 
-  const basisSeries = computeBasisSeries(data.price_series, data.vantage_price_series || [])
+  syncBasisDateRange(data.price_series)
+  const basisSeries = computeFilteredBasisSeries()
   renderBasisChart(basisSeries)
 
   if (fundingChart && priceChart && data.price_series.length) {
@@ -754,10 +777,10 @@ function applyRange(range) {
 }
 
 // Базис (Блок 27/30) — та же диагональная заливка/линия по знаку, что и у
-// funding-графика (divergingGradient), но цвета взяты из уже устоявшейся
-// палитры цена-графика: синий — цвет линии Vantage, янтарный — цвет линии
-// цены крипто-биржи (priceChartOption/lineChartOption) — так цвет базиса
-// интуитивно читается как «в какую сторону сейчас цена Vantage смещена».
+// funding-графика (divergingGradient), теми же зелёным/красным — сначала
+// пробовали синий/жёлтый (цвета линий на графике цены), но это разъезжалось
+// с цветовым языком остальных графиков (funding/PnL: зелёный=плюс,
+// красный=минус) и путало при чтении. Один язык на весь экран.
 function basisChartOption(series) {
   const data = series.map(p => [p.ts, p.basis_pct])
   const base = baseAxisStyle()
@@ -767,8 +790,8 @@ function basisChartOption(series) {
   const pad = (dataMax - dataMin) * 0.1 || 1
   const axisMax = dataMax + pad
   const axisMin = dataMin - pad
-  const lineColor = divergingGradient(axisMin, axisMax, '#58a6ff', '#d29922')
-  const areaColor = divergingGradient(axisMin, axisMax, 'rgba(88,166,255,.2)', 'rgba(210,153,34,.2)')
+  const lineColor = divergingGradient(axisMin, axisMax, '#3fb950', '#f85149')
+  const areaColor = divergingGradient(axisMin, axisMax, 'rgba(63,185,80,.2)', 'rgba(248,81,73,.2)')
 
   return {
     backgroundColor: 'transparent',
@@ -875,6 +898,10 @@ document.getElementById('pnl-reinvest-pct').addEventListener('input', (e) => {
 document.getElementById('pnl-start-date').addEventListener('change', (e) => {
   pnlState.startDate = e.target.value || null
   renderPnlChart()
+})
+document.getElementById('basis-start-date').addEventListener('change', (e) => {
+  basisStartDate = e.target.value || null
+  renderBasisChart(computeFilteredBasisSeries())
 })
 document.querySelectorAll('#pnl-fee-picker .pill').forEach(btn => {
   btn.addEventListener('click', () => {
