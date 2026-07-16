@@ -18,7 +18,7 @@ from .db import (
     init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
-    delete_mistagged_price_rows,
+    delete_mistagged_price_rows, get_vantage_symbol,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -145,6 +145,21 @@ async def instruments_vantage():
     try:
         symbols = await get_vantage_symbols()
         return JSONResponse({'ok': True, 'items': [s['symbol'] for s in symbols]})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.get('/api/vantage/symbol-info/{symbol}')
+async def vantage_symbol_info(symbol: str):
+    """Спецификация одного инструмента Vantage — своп/маржа/контракт для
+    расчёта второй ноги в P&L-симуляторе (Блок 32). Расчёт %-ставки из
+    сырых своп-данных делаем на клиенте (там же, где считается P&L)."""
+    try:
+        row = await get_vantage_symbol(symbol)
+        if not row:
+            return JSONResponse({'ok': False, 'error': 'Нет данных по этому символу'}, status_code=404)
+        return JSONResponse({'ok': True, 'symbol': row})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)

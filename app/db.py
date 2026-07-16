@@ -167,6 +167,25 @@ async def get_vantage_symbols() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+async def get_vantage_symbol(symbol: str) -> dict | None:
+    """Спецификация одного инструмента Vantage (своп/маржа/контракт) — нужна
+    фронту для расчёта второй ноги в P&L-симуляторе (Блок 27/32): своп сам по
+    себе (SYMBOL_SWAP_LONG/SHORT) не сравним между инструментами без режима
+    (SYMBOL_SWAP_MODE) и контракта — расчёт делаем на клиенте, а не здесь,
+    сервер просто отдаёт сырые данные."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """
+            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at
+            FROM vantage_symbols WHERE symbol = ?
+            """,
+            (symbol,)
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 async def delete_asset(key: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('DELETE FROM assets WHERE key = ?', (key,))
