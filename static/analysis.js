@@ -3,6 +3,7 @@ const EXCHANGE_LABELS = { okx: 'OKX', binance: 'Binance', hyperliquid: 'Hyperliq
 const state = { exchange: 'binance', asset: 'XAU', priceChartType: 'line' }
 let currentPriceSeries = []
 let currentVantageSeries = []
+let currentVantageSwap = null
 let fundingChart = null
 let priceChart = null
 let basisChart = null
@@ -14,7 +15,7 @@ let currentFundingSeries = []
 const pnlState = {
   deposit: 10000, leverage: 1, twoLegs: true, reinvestPct: 0,
   side: 'short', feeType: 'taker', feePct: 0.05,
-  startDate: null, rebalanceThresholdPct: 50,
+  startDate: null, rebalanceThresholdPct: 50, spreadPct: 0.05,
 }
 
 // null = считаем с самого начала собранной истории. Диапазон дат в поле
@@ -104,7 +105,12 @@ async function load() {
     }
     loading.style.display = 'none'
     card.style.display = 'block'
-    data.vantage_price_series = await loadVantagePriceSeries(asset)
+    const [vantagePriceSeries, vantageSwap] = await Promise.all([
+      loadVantagePriceSeries(asset),
+      loadVantageSwapInfo(asset),
+    ])
+    data.vantage_price_series = vantagePriceSeries
+    currentVantageSwap = vantageSwap
     render(data)
     if (asset !== lastLiveAsset) {
       loadLive(asset)
@@ -134,6 +140,21 @@ async function loadVantagePriceSeries(asset) {
     return data.rows.map(p => ({ ts: p.ts, close: p.close })).sort((a, b) => a.ts - b.ts)
   } catch (e) {
     return []
+  }
+}
+
+// Спецификация свопа Vantage для второй ноги (Блок 32) — только если у
+// текущего актива вообще есть привязанный тикер Vantage (ASSET_VANTAGE,
+// заполняется на сервере из assets.vantage).
+async function loadVantageSwapInfo(asset) {
+  const symbol = ASSET_VANTAGE[asset]
+  if (!symbol) return null
+  try {
+    const r = await fetch(`/api/vantage/symbol-info/${encodeURIComponent(symbol)}`)
+    const data = await r.json()
+    return data.ok ? data.symbol : null
+  } catch (e) {
+    return null
   }
 }
 
@@ -264,8 +285,12 @@ function render(data) {
   currentPriceSeries = data.price_series
   syncFeePreset()
   syncPnlDateRange(data.funding_series)
-  renderPnlChart()
+  // renderPriceChart ДО renderPnlChart — вторая нога в PnL (Блок 32) читает
+  // currentVantageSeries, которую выставляет именно renderPriceChart; в
+  // обратном порядке своп на первом рендере после смены актива считался бы
+  // по цене Vantage ещё от ПРЕДЫДУЩЕГО актива.
   renderPriceChart(data.price_series, data.vantage_price_series || [])
+  renderPnlChart()
 
   syncBasisDateRange(data.price_series)
   const basisSeries = computeFilteredBasisSeries()
@@ -543,6 +568,50 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`
 }
 
+// Норма свопа Vantage (Блок 32) в % от ноционала за одну ночь. У всех
+// проверенных активов (XAU/XAG/XPT/XPD/BRENT/NATGAS — режим POINTS; WTI —
+// DISABLED, своп нулевой) — см. Инструкцию. Остальные 8 режимов MQL5
+// (валютные/процентные/reopen) не встречались и осознанно не поддержаны —
+// возвращаем null явно, а не тихо считаем 0. POINTS переводится в % так:
+// swap_money_per_lot = swap_points * point_size * contract_size;
+// notional_per_lot = price * contract_size — contract_size сокращается,
+// остаётся swap_points * point_size / price.
+function swapPctPerNight(swapInfo, currentPrice) {
+  if (!swapInfo || !currentPrice) return null
+  const { swap_mode, swap_long, swap_short, digits } = swapInfo
+  if (swap_mode === 0) return { long: 0, short: 0 }
+  if (swap_mode === 1) {
+    const point = Math.pow(10, -digits)
+    return {
+      long: (swap_long * point / currentPrice) * 100,
+      short: (swap_short * point / currentPrice) * 100,
+    }
+  }
+  return null
+}
+
+// Своп+спред хедж-ноги на Vantage за период (Блок 32). Хедж всегда
+// противоположен основной ноге (шорт на бирже фандинга => лонг на Vantage,
+// и наоборот — иначе обе ноги ловят один и тот же риск вместо хеджа друг
+// друга). Ноционал хедж-ноги = ноционал основной ноги (капитал пополам,
+// см. startingNotional) — считаем хедж тем же объёмом, что и рабочую ногу.
+// null, если по активу нет тикера/спецификации Vantage — тогда вторая нога
+// просто не даёт вклада в P&L (как и было до Блока 32).
+function computeHedgeLegCosts(startTs, endTs) {
+  if (!currentVantageSwap || !currentVantageSeries.length) return null
+  const price = currentVantageSeries[currentVantageSeries.length - 1].close
+  const rates = swapPctPerNight(currentVantageSwap, price)
+  if (!rates) return null
+  const hedgeRatePct = pnlState.side === 'short' ? rates.long : rates.short
+  const nights = Math.max(0, (endTs - startTs) / 86400000)
+  const notional = startingNotional()
+  return {
+    swapCost: notional * (hedgeRatePct / 100) * nights,
+    spreadCost: notional * (pnlState.spreadPct / 100) * 2,
+    nights, symbol: currentVantageSwap.symbol,
+  }
+}
+
 // Оценка «сколько раз пришлось бы перекинуть маржу между ногами». Модель:
 // капитал поровну на двух ногах (эта биржа + хедж на форексе вне дашборда),
 // цена одна и та же для обеих (считаем хедж идеальным, без базисного риска) —
@@ -601,7 +670,15 @@ function renderPnlSummary() {
   const gross = data[data.length - 1][1]
   const notional = startingNotional()
   const feeCost = notional * (pnlState.feePct / 100) * 2
-  const net = gross - feeCost
+
+  // Вторая нога (Блок 32): своп + спред хедж-позиции на Vantage — только
+  // в режиме «2 ноги» и если для актива вообще есть тикер/спецификация
+  // Vantage (иначе hedge === null и вклад в net нулевой, как было раньше).
+  const hedge = pnlState.twoLegs ? computeHedgeLegCosts(series[0].ts, series[series.length - 1].ts) : null
+  const swapCost = hedge ? hedge.swapCost : 0
+  const spreadCost = hedge ? hedge.spreadCost : 0
+
+  const net = gross - feeCost + swapCost - spreadCost
   // Доходность в % — от депозита (реально вложенных денег), а не от
   // ноционала (который может быть больше депозита из-за плеча).
   const pctReturn = (net / pnlState.deposit) * 100
@@ -611,10 +688,18 @@ function renderPnlSummary() {
     { label: 'Стартовый ноционал', value: `$${notional.toLocaleString('ru-RU', { maximumFractionDigits: 0 })}`, sign: 0 },
     { label: 'Фандинг (до комиссии)', value: fmtMoney(gross), sign: gross },
     { label: 'Комиссия вход+выход', value: `−$${feeCost.toFixed(2)}`, sign: 0 },
+  ]
+  if (hedge) {
+    cards.push(
+      { label: 'Своп (вторая нога)', value: fmtMoney(swapCost), sign: swapCost, detail: `${hedge.nights.toFixed(0)} ноч. · Vantage ${hedge.symbol}` },
+      { label: 'Спред (вторая нога)', value: `−$${spreadCost.toFixed(2)}`, sign: 0, detail: 'вход+выход, оценка' },
+    )
+  }
+  cards.push(
     { label: 'Чистый P&L', value: fmtMoney(net), sign: net },
     { label: 'Доходность, %', value: fmtPct(pctReturn), sign: pctReturn, detail: 'от депозита, за период' },
     { label: 'Доходность, % годовых', value: annPct === null ? 'н/д' : fmtPct(annPct), sign: annPct || 0, detail: 'линейная экстраполяция на год' },
-  ]
+  )
 
   if (pnlState.twoLegs) {
     const priceSeries = filterFromDate(currentPriceSeries, pnlState.startDate)
@@ -909,6 +994,13 @@ document.getElementById('pnl-leverage').addEventListener('input', (e) => {
 document.getElementById('pnl-two-legs').addEventListener('change', (e) => {
   pnlState.twoLegs = e.target.checked
   document.getElementById('pnl-threshold-wrap').style.display = pnlState.twoLegs ? '' : 'none'
+  document.getElementById('pnl-spread-wrap').style.display = pnlState.twoLegs ? '' : 'none'
+  renderPnlChart()
+})
+document.getElementById('pnl-spread-pct').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value)
+  if (!isFinite(v) || v < 0) return
+  pnlState.spreadPct = v
   renderPnlChart()
 })
 document.getElementById('pnl-rebalance-threshold').addEventListener('input', (e) => {

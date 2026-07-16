@@ -18,7 +18,7 @@ from .db import (
     init_db, upsert_rows, get_history, upsert_price_rows, get_price_history,
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
-    delete_mistagged_price_rows, get_vantage_symbol,
+    delete_mistagged_price_rows, get_vantage_symbol, update_asset_vantage,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -68,9 +68,13 @@ templates = Jinja2Templates(directory='templates')
 @app.get('/', response_class=HTMLResponse)
 async def index(request: Request):
     asset_labels_json = json.dumps({k: v['label'] for k, v in ASSETS.items()}, ensure_ascii=False)
+    asset_vantage_json = json.dumps({k: v.get('vantage') for k, v in ASSETS.items()}, ensure_ascii=False)
     return templates.TemplateResponse(
         'index.html',
-        {'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json, 'v': ASSET_VERSION}
+        {
+            'request': request, 'assets': ASSETS, 'asset_labels_json': asset_labels_json,
+            'asset_vantage_json': asset_vantage_json, 'v': ASSET_VERSION,
+        }
     )
 
 
@@ -230,6 +234,20 @@ async def add_asset(request: Request):
     await insert_asset(key, label, okx, binance, hyperliquid_dex, hyperliquid_coin, vantage)
     await refresh_assets_cache()
     return JSONResponse({'ok': True, 'asset': key, 'checks': checks})
+
+
+@app.patch('/api/assets/{key}/vantage')
+async def patch_asset_vantage(key: str, request: Request):
+    """Точечное обновление тикера Vantage у уже существующего актива (Блок 32) —
+    у insert_asset нет апдейта, а у активов до Блока 22 поле vantage пустое."""
+    key = key.upper()
+    if key not in ASSETS:
+        return JSONResponse({'ok': False, 'error': 'Неизвестный актив'}, status_code=404)
+    body = await request.json()
+    vantage = (body.get('vantage') or '').strip() or None
+    await update_asset_vantage(key, vantage)
+    await refresh_assets_cache()
+    return JSONResponse({'ok': True, 'asset': key, 'vantage': vantage})
 
 
 @app.delete('/api/assets/{key}')

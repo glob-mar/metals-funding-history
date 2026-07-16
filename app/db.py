@@ -167,6 +167,16 @@ async def get_vantage_symbols() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+async def update_asset_vantage(key: str, vantage: str | None) -> int:
+    """Точечное обновление поля vantage у уже существующего актива (Блок 32) —
+    у insert_asset нет апдейта на конфликте, а у первых 6 активов (заведены
+    ещё до Блока 22) это поле так и осталось пустым."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute('UPDATE assets SET vantage = ? WHERE key = ?', (vantage, key))
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_vantage_symbol(symbol: str) -> dict | None:
     """Спецификация одного инструмента Vantage (своп/маржа/контракт) — нужна
     фронту для расчёта второй ноги в P&L-симуляторе (Блок 27/32): своп сам по
