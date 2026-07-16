@@ -269,7 +269,7 @@ function render(data) {
 
   syncBasisDateRange(data.price_series)
   const basisSeries = computeFilteredBasisSeries()
-  renderBasisChart(basisSeries)
+  renderBasisChart(basisSeries, filterFromDate(currentFundingSeries, basisStartDate))
 
   if (fundingChart && priceChart && data.price_series.length) {
     fundingChart.group = 'analysis-sync'
@@ -781,7 +781,14 @@ function applyRange(range) {
 // пробовали синий/жёлтый (цвета линий на графике цены), но это разъезжалось
 // с цветовым языком остальных графиков (funding/PnL: зелёный=плюс,
 // красный=минус) и путало при чтении. Один язык на весь экран.
-function basisChartOption(series) {
+// fundingSeries (Блок 30) — фандинг-ставка выбранной крипто-биржи наложена
+// второй линией на свою (правую) ось Y: масштаб на 1-2 порядка меньше базиса
+// (доли процента за период против единиц/десятков процентов базиса), общая
+// ось искажала бы обе линии. Нужна, чтобы визуально проверять гипотезу —
+// расширение базиса часто совпадает с периодами устойчиво высокого фандинга
+// (см. Инструкцию, Блок 30/31): биржа временно «перегрета» лонгами/шортами,
+// её цена уезжает от справедливой, и базис относительно неё расширяется.
+function basisChartOption(series, fundingSeries = []) {
   const data = series.map(p => [p.ts, p.basis_pct])
   const base = baseAxisStyle()
   const values = series.map(p => p.basis_pct)
@@ -793,34 +800,55 @@ function basisChartOption(series) {
   const lineColor = divergingGradient(axisMin, axisMax, '#3fb950', '#f85149')
   const areaColor = divergingGradient(axisMin, axisMax, 'rgba(63,185,80,.2)', 'rgba(248,81,73,.2)')
 
+  const seriesList = [{
+    name: 'Базис', type: 'line', data, showSymbol: false, lineStyle: { width: 1.3, color: lineColor },
+    areaStyle: { color: areaColor },
+    progressive: 0,
+    markLine: {
+      symbol: 'none', silent: true, animation: false,
+      lineStyle: { color: '#484f58', type: 'dashed' },
+      data: [{ yAxis: 0 }], label: { show: false },
+    },
+  }]
+  const yAxisList = [{
+    ...base.yAxis, scale: false, min: axisMin, max: axisMax,
+    axisLabel: {
+      ...base.yAxis.axisLabel, formatter: v => v.toFixed(2) + '%',
+      showMinLabel: false, showMaxLabel: false,
+    },
+  }]
+
+  if (fundingSeries.length) {
+    seriesList.push({
+      name: 'Фандинг', type: 'line', yAxisIndex: 1, z: 4,
+      data: fundingSeries.map(p => [p.ts, p.rate_pct]),
+      showSymbol: false, lineStyle: { width: 1, color: '#d29922' },
+    })
+    yAxisList.push({
+      type: 'value', scale: true, position: 'right',
+      axisLine: { lineStyle: { color: '#30363d' } },
+      axisLabel: { color: '#6e7681', formatter: v => v.toFixed(3) + '%' },
+      splitLine: { show: false },
+    })
+  }
+
   return {
     backgroundColor: 'transparent',
     animation: false,
-    grid: { left: 55, right: 20, top: 20, bottom: 20 },
+    grid: { left: 55, right: fundingSeries.length ? 55 : 20, top: 20, bottom: 20 },
     tooltip: { ...base.tooltip, valueFormatter: v => (v > 0 ? '+' : '') + v.toFixed(3) + '%' },
+    legend: fundingSeries.length ? {
+      data: seriesList.map(s => s.name),
+      textStyle: { color: '#8b949e' }, top: 0, right: 10, itemWidth: 14, itemHeight: 8,
+    } : undefined,
     xAxis: base.xAxis,
-    yAxis: {
-      ...base.yAxis, scale: false, min: axisMin, max: axisMax,
-      axisLabel: {
-        ...base.yAxis.axisLabel, formatter: v => v.toFixed(2) + '%',
-        showMinLabel: false, showMaxLabel: false,
-      },
-    },
+    yAxis: yAxisList,
     dataZoom: [{ type: 'inside' }],
-    series: [{
-      type: 'line', data, showSymbol: false, lineStyle: { width: 1.3, color: lineColor },
-      areaStyle: { color: areaColor },
-      progressive: 0,
-      markLine: {
-        symbol: 'none', silent: true, animation: false,
-        lineStyle: { color: '#484f58', type: 'dashed' },
-        data: [{ yAxis: 0 }], label: { show: false },
-      },
-    }],
+    series: seriesList,
   }
 }
 
-function renderBasisChart(series) {
+function renderBasisChart(series, fundingSeries = []) {
   const el = document.getElementById('basis-chart')
   const empty = document.getElementById('basis-chart-empty')
   if (!basisChart) basisChart = echarts.init(el, null, { renderer: 'canvas' })
@@ -835,7 +863,7 @@ function renderBasisChart(series) {
   el.style.display = 'block'
   empty.style.display = 'none'
   basisChart.clear()
-  basisChart.setOption(basisChartOption(series))
+  basisChart.setOption(basisChartOption(series, fundingSeries))
 }
 
 document.querySelectorAll('#exchange-picker .pill').forEach(btn => {
@@ -901,7 +929,7 @@ document.getElementById('pnl-start-date').addEventListener('change', (e) => {
 })
 document.getElementById('basis-start-date').addEventListener('change', (e) => {
   basisStartDate = e.target.value || null
-  renderBasisChart(computeFilteredBasisSeries())
+  renderBasisChart(computeFilteredBasisSeries(), filterFromDate(currentFundingSeries, basisStartDate))
 })
 document.querySelectorAll('#pnl-fee-picker .pill').forEach(btn => {
   btn.addEventListener('click', () => {

@@ -144,6 +144,15 @@ body { font-family: var(--font-ui); }
 }
 .info-tip:hover::after { opacity: 1; visibility: visible; }
 
+.explainer-box {
+  background: var(--surface-2); border: 1px solid var(--border-default);
+  border-radius: var(--r-card); padding: .7rem .9rem; margin-bottom: .8rem;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-secondary);
+}
+.explainer-box strong { color: var(--text-primary); }
+.explainer-box p { margin: 0; }
+.explainer-box p + p { margin-top: .5rem; }
+
 .table-scroll { overflow-x: auto; }
 .monthly-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .monthly-table th {
