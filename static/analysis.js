@@ -568,26 +568,53 @@ function fmtMoney(v) {
   return `${sign}$${Math.abs(v).toFixed(2)}`
 }
 
-// Норма свопа Vantage (Блок 32) в % от ноционала за одну ночь. У всех
-// проверенных активов (XAU/XAG/XPT/XPD/BRENT/NATGAS — режим POINTS; WTI —
-// DISABLED, своп нулевой) — см. Инструкцию. Остальные 8 режимов MQL5
-// (валютные/процентные/reopen) не встречались и осознанно не поддержаны —
-// возвращаем null явно, а не тихо считаем 0. POINTS переводится в % так:
-// swap_money_per_lot = swap_points * point_size * contract_size;
-// notional_per_lot = price * contract_size — contract_size сокращается,
-// остаётся swap_points * point_size / price.
+// Норма свопа Vantage (Блок 32/33) в % от ноционала за одну ночь.
+// Металлы/EUR — режим POINTS (проверено на реальных цифрах весь сезон).
+// Акции (AAPL/NVIDIA/GOOG/AMAZON/AMD/DELL) шлют другой режим — офиц.
+// документация MQL5 по номерам ENUM_SYMBOL_SWAP_MODE от 5 и выше противоречит
+// сама себе в разных источниках, поэтому номер не хардкодим как факт, а
+// определили ЭМПИРИЧЕСКИ: swap_long/short у всех акций совпадают (-6/+2 или
+// -7/+1.8 для .24H) независимо от цены самой акции ($100 у DELL vs $700 у
+// NVIDIA) — это возможно только если своп уже выражен в %, а не в $/лот
+// (иначе разные по цене акции имели бы разный $-своп). Значит это «годовые
+// проценты от текущей цены» (в MQL5 такой режим точно есть, банковский год
+// = 360 дней) — делим на 360, без пересчёта через price/digits. С Блока 33
+// EA шлёт текстовое имя режима через EnumToString() (однозначно, не число) —
+// старые закэшированные строки (до пересинка) остаются числовыми, поддерживаем
+// оба варианта. Подробности — см. Инструкцию, Блок 33.
+// POINTS переводится в % так: swap_money_per_lot = swap_points * point_size *
+// contract_size; notional_per_lot = price * contract_size — contract_size
+// сокращается, остаётся swap_points * point_size / price.
+const SWAP_MODE_DISABLED = new Set([0, 'SYMBOL_SWAP_MODE_DISABLED'])
+const SWAP_MODE_POINTS = new Set([1, 'SYMBOL_SWAP_MODE_POINTS'])
+const SWAP_MODE_ANNUAL_PCT = new Set([5, 'SYMBOL_SWAP_MODE_INTEREST_CURRENT'])
+
 function swapPctPerNight(swapInfo, currentPrice) {
   if (!swapInfo || !currentPrice) return null
   const { swap_mode, swap_long, swap_short, digits } = swapInfo
-  if (swap_mode === 0) return { long: 0, short: 0 }
-  if (swap_mode === 1) {
+  if (SWAP_MODE_DISABLED.has(swap_mode)) return { long: 0, short: 0 }
+  if (SWAP_MODE_POINTS.has(swap_mode)) {
     const point = Math.pow(10, -digits)
     return {
       long: (swap_long * point / currentPrice) * 100,
       short: (swap_short * point / currentPrice) * 100,
     }
   }
+  if (SWAP_MODE_ANNUAL_PCT.has(swap_mode)) {
+    return { long: swap_long / 360, short: swap_short / 360 }
+  }
   return null
+}
+
+// Живой спред Vantage (Блок 33) в % от цены — сервер отдаёт последний
+// известный snapshot (ask-bid в цене инструмента, обновляется на каждом
+// синке EA), а не историю: настоящей истории спреда мы не пишем, поэтому
+// переносим текущее значение на весь период расчёта (осознанное упрощение,
+// сам пользователь так и предложил). null, если EA этот актив ещё не
+// пересинкал после Блока 33 — тогда используем ручной инпут как раньше.
+function liveSpreadPct(swapInfo, currentPrice) {
+  if (!swapInfo || swapInfo.spread == null || !currentPrice) return null
+  return (swapInfo.spread / currentPrice) * 100
 }
 
 // Своп+спред хедж-ноги на Vantage за период (Блок 32). Хедж всегда
@@ -605,9 +632,12 @@ function computeHedgeLegCosts(startTs, endTs) {
   const hedgeRatePct = pnlState.side === 'short' ? rates.long : rates.short
   const nights = Math.max(0, (endTs - startTs) / 86400000)
   const notional = startingNotional()
+  const live = liveSpreadPct(currentVantageSwap, price)
+  const spreadPct = live !== null ? live : pnlState.spreadPct
   return {
     swapCost: notional * (hedgeRatePct / 100) * nights,
-    spreadCost: notional * (pnlState.spreadPct / 100) * 2,
+    spreadCost: notional * (spreadPct / 100) * 2,
+    spreadPct, spreadIsLive: live !== null,
     nights, symbol: currentVantageSwap.symbol,
   }
 }
@@ -678,6 +708,24 @@ function renderPnlSummary() {
   const swapCost = hedge ? hedge.swapCost : 0
   const spreadCost = hedge ? hedge.spreadCost : 0
 
+  // Синхронизация ручного поля спреда с живым значением (Блок 33): если для
+  // актива уже есть свежий спред от EA — показываем его в поле и блокируем
+  // ввод (иначе редактирование выглядело бы рабочим, но не влияло бы на
+  // расчёт, т.к. живое значение всегда в приоритете). Нет живых данных —
+  // поле остаётся обычным ручным вводом, как было до Блока 33.
+  const spreadInput = document.getElementById('pnl-spread-pct')
+  const spreadHint = document.getElementById('pnl-spread-live-hint')
+  if (spreadInput && spreadHint) {
+    if (hedge && hedge.spreadIsLive) {
+      spreadInput.value = hedge.spreadPct.toFixed(3)
+      spreadInput.disabled = true
+      spreadHint.textContent = `live: Vantage ${hedge.symbol}`
+    } else {
+      spreadInput.disabled = false
+      spreadHint.textContent = ''
+    }
+  }
+
   const net = gross - feeCost + swapCost - spreadCost
   // Доходность в % — от депозита (реально вложенных денег), а не от
   // ноционала (который может быть больше депозита из-за плеча).
@@ -692,7 +740,7 @@ function renderPnlSummary() {
   if (hedge) {
     cards.push(
       { label: 'Своп (вторая нога)', value: fmtMoney(swapCost), sign: swapCost, detail: `${hedge.nights.toFixed(0)} ноч. · Vantage ${hedge.symbol}` },
-      { label: 'Спред (вторая нога)', value: `−$${spreadCost.toFixed(2)}`, sign: 0, detail: 'вход+выход, оценка' },
+      { label: 'Спред (вторая нога)', value: `−$${spreadCost.toFixed(2)}`, sign: 0, detail: hedge.spreadIsLive ? `вход+выход, живой спред Vantage ${hedge.spreadPct.toFixed(3)}%` : 'вход+выход, ручная оценка' },
     )
   }
   cards.push(

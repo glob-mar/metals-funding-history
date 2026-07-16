@@ -106,6 +106,7 @@ body { font-family: var(--font-ui); }
 }
 .pnl-notional-label select { width: auto; }
 .pnl-notional-label input:focus, .pnl-notional-label select:focus { outline: none; border-color: var(--chart-line); }
+.pnl-notional-label input:disabled { opacity: .6; cursor: not-allowed; }
 #screener-start-date, #screener-end-date { width: 140px; }
 .pnl-checkbox-label {
   font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: .4rem;

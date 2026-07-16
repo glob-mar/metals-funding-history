@@ -84,6 +84,8 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 }
 .ticker-chip-empty { font-size: .8rem; color: #6e7681; }
 
+.live-hint { font-size: .72rem; color: #3fb950; }
+
 #af-session-log { font-size: .82rem; color: #8b949e; margin-top: .3rem; }
 #af-session-log .af-log-row { padding: .15rem 0; }
 #af-session-log .af-log-row.ok { color: #3fb950; }

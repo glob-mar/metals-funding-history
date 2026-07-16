@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS vantage_symbols (
     contract_size  REAL,
     margin_initial REAL,
     digits         INTEGER,
+    spread         REAL,
     updated_at     INTEGER NOT NULL
 );
 """
@@ -76,6 +77,10 @@ async def init_db():
         cols = {row[1] for row in await cur.fetchall()}
         if 'vantage' not in cols:
             await db.execute("ALTER TABLE assets ADD COLUMN vantage TEXT")
+        cur = await db.execute("PRAGMA table_info(vantage_symbols)")
+        vcols = {row[1] for row in await cur.fetchall()}
+        if 'spread' not in vcols:
+            await db.execute("ALTER TABLE vantage_symbols ADD COLUMN spread REAL")
         await db.commit()
 
 
@@ -136,18 +141,18 @@ async def upsert_vantage_symbols(rows: list[dict]) -> int:
     if not rows:
         return 0
     sql = """
-    INSERT INTO vantage_symbols (symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO vantage_symbols (symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, spread, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(symbol) DO UPDATE SET
         swap_long = excluded.swap_long, swap_short = excluded.swap_short, swap_mode = excluded.swap_mode,
         contract_size = excluded.contract_size, margin_initial = excluded.margin_initial,
-        digits = excluded.digits, updated_at = excluded.updated_at
+        digits = excluded.digits, spread = excluded.spread, updated_at = excluded.updated_at
     """
     now_ms = int(time.time() * 1000)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executemany(sql, [
             (r['symbol'], r.get('swap_long'), r.get('swap_short'), r.get('swap_mode'),
-             r.get('contract_size'), r.get('margin_initial'), r.get('digits'), now_ms)
+             r.get('contract_size'), r.get('margin_initial'), r.get('digits'), r.get('spread'), now_ms)
             for r in rows
         ])
         await db.commit()
@@ -159,7 +164,7 @@ async def get_vantage_symbols() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """
-            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at
+            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, spread, updated_at
             FROM vantage_symbols ORDER BY symbol ASC
             """
         )
@@ -187,7 +192,7 @@ async def get_vantage_symbol(symbol: str) -> dict | None:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """
-            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, updated_at
+            SELECT symbol, swap_long, swap_short, swap_mode, contract_size, margin_initial, digits, spread, updated_at
             FROM vantage_symbols WHERE symbol = ?
             """,
             (symbol,)
@@ -265,6 +270,20 @@ async def delete_mistagged_price_rows(exchange: str, asset: str, exclude_symbol:
         cur = await db.execute(
             "DELETE FROM price_history WHERE exchange = ? AND asset = ? AND symbol != ?",
             (exchange, asset, exclude_symbol)
+        )
+        await db.commit()
+        return cur.rowcount
+
+
+async def retag_price_rows(exchange: str, symbol: str, new_asset: str) -> int:
+    """Переразметка asset-тега у уже собранных строк price_history (Блок 33) —
+    сырой бэкфилл Vantage писал asset=symbol (напр. 'NVIDIA'), т.к. активов
+    NVDA/GOOGL/AMZN/EUR тогда ещё не было в дашборде. Меняем на ключ актива,
+    под который их ищет get_price_history(), не трогая сами точки данных."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE price_history SET asset = ? WHERE exchange = ? AND symbol = ?",
+            (new_asset, exchange, symbol)
         )
         await db.commit()
         return cur.rowcount

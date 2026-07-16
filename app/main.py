@@ -19,6 +19,7 @@ from .db import (
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
     delete_mistagged_price_rows, get_vantage_symbol, update_asset_vantage,
+    retag_price_rows,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -330,6 +331,26 @@ async def vantage_debug_cleanup():
     try:
         deleted = await delete_mistagged_price_rows('vantage', 'XAU', 'XAUUSD')
         return JSONResponse({'ok': True, 'deleted': deleted})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.post('/api/debug/vantage-retag')
+async def vantage_debug_retag(request: Request):
+    """Одноразовая переразметка (Блок 33): у бэкфилла asset=symbol (напр.
+    'NVIDIA', 'GOOG', 'EURUSD') — активов в UI тогда ещё не было. Меняем
+    asset на ключ дашборда, чтобы get_price_history() их находил. Тело:
+    {"mapping": {"<vantage-symbol>": "<asset-key>", ...}}."""
+    body = await request.json()
+    mapping = body.get('mapping') or {}
+    if not mapping:
+        return JSONResponse({'ok': False, 'error': 'mapping обязателен'}, status_code=400)
+    try:
+        result = {}
+        for symbol, asset in mapping.items():
+            result[symbol] = await retag_price_rows('vantage', symbol, asset)
+        return JSONResponse({'ok': True, 'retagged': result})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
