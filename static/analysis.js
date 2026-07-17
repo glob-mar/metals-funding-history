@@ -489,21 +489,40 @@ function startingNotional() {
 
 // Та же логика по периодам, что и computeSimulation (капитал так же растёт от
 // реинвеста от месяца к месяцу), но вместо одной итоговой кривой возвращает
-// сумму P&L отдельно по каждому календарному месяцу (UTC) — до комиссии,
-// комиссия разовая и по месяцам не размазывается.
-function computeMonthlyPnl(series, { deposit, leverage, twoLegs, reinvestPct, side }) {
+// сумму P&L отдельно по каждому календарному месяцу (UTC) — теперь чистыми
+// (Блок 34): своп размазан по месяцам пропорционально прошедшему времени
+// (та же логика, что и в computeNetSimulation для графика), а разовые
+// издержки (комиссия+спред) целиком списаны в первый месяц периода — они
+// уже зафиксированы в момент открытия обеих ног. Сумма всех месяцев поэтому
+// точно сходится с «Чистый P&L» в карточках сводки.
+function computeMonthlyPnl(series, { deposit, leverage, twoLegs, reinvestPct, side }, feeCost, hedge) {
   const sign = side === 'short' ? 1 : -1
   const legFactor = twoLegs ? 0.5 : 1
   let capital = deposit
   const monthly = {}
+  if (!series.length) return monthly
+
+  const swapTotal = hedge ? hedge.swapCost : 0
+  const spreadTotal = hedge ? hedge.spreadCost : 0
+  const startTs = series[0].ts
+  const totalMs = Math.max(1, series[series.length - 1].ts - startTs)
+  let prevFrac = 0
+
   for (const p of series) {
     const notional = capital * legFactor * leverage
     const periodPnl = sign * notional * (p.rate_pct / 100)
     capital += periodPnl * (reinvestPct / 100)
     const d = new Date(p.ts)
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
-    monthly[key] = (monthly[key] || 0) + periodPnl
+    const frac = Math.min(1, Math.max(0, (p.ts - startTs) / totalMs))
+    const swapSlice = swapTotal * (frac - prevFrac)
+    prevFrac = frac
+    monthly[key] = (monthly[key] || 0) + periodPnl + swapSlice
   }
+
+  const firstKey = Object.keys(monthly).sort()[0]
+  if (firstKey !== undefined) monthly[firstKey] += -feeCost - spreadTotal
+
   return monthly
 }
 
@@ -520,12 +539,38 @@ function renderPnlMonthlyTable(monthlyPnl) {
     total += v
     return `<tr><td>${MONTH_NAMES_SHORT[m]} ${y}</td><td class="num ${signClass(v)}">${fmtMoney(v)}</td></tr>`
   }).join('')
-  el.innerHTML = `<thead><tr><th>Месяц</th><th>P&L (до комиссии)</th></tr></thead><tbody>${rows}` +
+  el.innerHTML = `<thead><tr><th>Месяц</th><th>Чистый P&L</th></tr></thead><tbody>${rows}` +
     `<tr class="pnl-monthly-total"><td>Итого</td><td class="num ${signClass(total)}">${fmtMoney(total)}</td></tr></tbody>`
 }
 
+// Кумулятивная кривая P&L для графика (Блок 34) — раньше показывала только
+// гросс-фандинг (до комиссии/свопа/спреда), из-за чего график расходился с
+// «Чистый P&L» в сводке (напр. +$23838 на кривой против реальных +$8328
+// чистыми) — визуально вводило в заблуждение насчёт реального результата.
+// Разовые издержки (комиссия+спред, обе round-trip) списываем целиком в
+// момент открытия обеих ног (t0) — они уже к этому моменту зафиксированы,
+// а не растянуты во времени. Своп начисляется плавно, пропорционально
+// прошедшему времени (сама ставка свопа в расчёте константна на весь
+// период, поэтому линейное распределение не добавляет новых допущений
+// сверх уже принятых для итоговой цифры в сводке).
+function computeNetSimulation(series) {
+  const gross = computeSimulation(series, pnlState)
+  if (!gross.length) return gross
+  const notional = startingNotional()
+  const feeCost = notional * (pnlState.feePct / 100) * 2
+  const hedge = pnlState.twoLegs ? computeHedgeLegCosts(series[0].ts, series[series.length - 1].ts) : null
+  const swapTotal = hedge ? hedge.swapCost : 0
+  const spreadTotal = hedge ? hedge.spreadCost : 0
+  const startTs = series[0].ts
+  const totalMs = Math.max(1, series[series.length - 1].ts - startTs)
+  return gross.map(([ts, cumGross]) => {
+    const frac = Math.min(1, Math.max(0, (ts - startTs) / totalMs))
+    return [ts, cumGross - feeCost + swapTotal * frac - spreadTotal]
+  })
+}
+
 function pnlChartOption(series) {
-  const data = computeSimulation(series, pnlState)
+  const data = computeNetSimulation(series)
   const base = baseAxisStyle()
   const values = data.map(d => d[1])
   const dataMax = Math.max(...values, 0)
@@ -771,7 +816,7 @@ function renderPnlSummary() {
     </div>
   `).join('')
 
-  renderPnlMonthlyTable(computeMonthlyPnl(series, pnlState))
+  renderPnlMonthlyTable(computeMonthlyPnl(series, pnlState, feeCost, hedge))
 }
 
 function renderPnlChart() {
