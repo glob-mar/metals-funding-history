@@ -21,7 +21,7 @@ from .db import (
     delete_mistagged_price_rows, get_vantage_symbol, update_asset_vantage,
     retag_price_rows, update_asset_tickers,
 )
-from .services import collect, collect_prices, collect_live, validate_asset_tickers
+from .services import collect, collect_prices, collect_live, validate_asset_tickers, auto_match_ticker
 from . import instruments
 from .metrics import periods_per_year, interval_label
 from .analysis import exchange_stats, monthly_table, funding_price_correlation
@@ -150,6 +150,23 @@ async def instruments_vantage():
     try:
         symbols = await get_vantage_symbols()
         return JSONResponse({'ok': True, 'items': [s['symbol'] for s in symbols]})
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.get('/api/instruments/auto-match')
+async def instruments_auto_match(ticker: str, skip: str | None = None):
+    """Автопоиск того же тикера на остальных биржах (Блок 36) — по базовому
+    тикеру (без суффиксов конкретной биржи) пробует найти совпадение сразу
+    на OKX/Binance/Hyperliquid/Vantage. skip — биржа, которую уже выбрали
+    руками в форме, повторно её не дёргаем."""
+    ticker = ticker.strip().upper()
+    if not ticker:
+        return JSONResponse({'ok': False, 'error': 'ticker обязателен'}, status_code=400)
+    try:
+        matches = await auto_match_ticker(ticker, skip)
+        return JSONResponse({'ok': True, 'matches': matches})
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)

@@ -206,7 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   exchangeSelect.addEventListener('change', onExchangeChange)
 
-  document.getElementById('af-add-ticker-btn').addEventListener('click', () => {
+  document.getElementById('af-add-ticker-btn').addEventListener('click', async () => {
     const ex = exchangeSelect.value
     const value = instrumentInput.value.trim()
     if (!value) { alert('Выбери инструмент из списка'); return }
@@ -218,6 +218,36 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     renderTickerChips()
     instrumentInput.value = ''
+
+    // Автопоиск того же тикера на остальных биржах (Блок 36) — раньше
+    // приходилось руками по очереди выбирать каждую биржу для одного и
+    // того же актива. Заполняем только ПУСТЫЕ слоты — то, что пользователь
+    // уже выбрал сам (в т.ч. в этом же клике), не трогаем.
+    const baseTicker = deriveDraftKey()
+    if (!baseTicker) return
+    const statusEl = document.getElementById('asset-form-status')
+    statusEl.textContent = '⏳ Ищу этот тикер на остальных биржах...'
+    try {
+      const r = await fetch(`/api/instruments/auto-match?ticker=${encodeURIComponent(baseTicker)}&skip=${encodeURIComponent(ex)}`)
+      const data = await r.json()
+      if (!data.ok) { statusEl.textContent = ''; return }
+      const m = data.matches
+      const found = []
+      if (!assetDraft.okx && m.okx) { assetDraft.okx = m.okx; found.push('OKX') }
+      if (!assetDraft.binance && m.binance) { assetDraft.binance = m.binance; found.push('Binance') }
+      if (!assetDraft.hyperliquid_coin && m.hyperliquid_coin) {
+        assetDraft.hyperliquid_dex = m.hyperliquid_dex
+        assetDraft.hyperliquid_coin = m.hyperliquid_coin
+        found.push('Hyperliquid')
+      }
+      if (!assetDraft.vantage && m.vantage) { assetDraft.vantage = m.vantage; found.push('Vantage') }
+      renderTickerChips()
+      statusEl.textContent = found.length
+        ? `✅ Дополнительно нашёлся тикер на: ${found.join(', ')} — проверь чипы и при желании убери лишнее`
+        : 'ℹ️ На остальных биржах этот тикер по прямому совпадению не нашёлся — добавь вручную, если знаешь название там'
+    } catch (e) {
+      statusEl.textContent = ''
+    }
   })
 
   // Общая логика сохранения (Блок 33) — раньше жила только в обработчике

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 import httpx
 from .config import ASSETS, BINANCE_FAPI
+from .db import get_vantage_symbols
 
 OKX_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 HL_URL  = 'https://api.hyperliquid.xyz/info'
@@ -431,6 +432,42 @@ async def validate_asset_tickers(okx: str | None, binance: str | None,
             result['binance'] = await validate_binance_ticker(c, binance)
         if hyperliquid_coin:
             result['hyperliquid'] = await validate_hyperliquid_ticker(c, hyperliquid_dex or '', hyperliquid_coin)
+    return result
+
+
+async def auto_match_ticker(base_ticker: str, skip: str | None = None) -> dict:
+    """Автопоиск того же инструмента на остальных биржах по одному базовому
+    тикеру (Блок 36) — раньше добавить актив сразу на нескольких площадках
+    можно было только вручную выбирая каждую биржу по очереди. OKX/Binance
+    угадываются по предсказуемому паттерну имени (TICKER-USDT-SWAP /
+    TICKERUSDT) и проверяются живым запросом, как при обычном добавлении
+    актива. Hyperliquid — тем же паттерном, что и у всех уже заведённых
+    некрипто-активов (dex 'xyz'), тоже с живой проверкой. Vantage паттерна не
+    имеет вообще (часть тикеров там — полное название компании, не тикер, см.
+    Блок 33), поэтому только точное совпадение по уже собранному кэшу
+    vantage_symbols — если не нашлось, это не ошибка, просто у Vantage может
+    называться иначе, добавляется вручную."""
+    okx_candidate = f'{base_ticker}-USDT-SWAP'
+    binance_candidate = f'{base_ticker}USDT'
+    hl_candidate = f'xyz:{base_ticker}'
+    result = {'okx': None, 'binance': None, 'hyperliquid_dex': None, 'hyperliquid_coin': None, 'vantage': None}
+
+    timeout = httpx.Timeout(15.0)
+    headers = {'User-Agent': 'metals-funding-history/1.0'}
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as c:
+        if skip != 'okx' and await validate_okx_ticker(c, okx_candidate):
+            result['okx'] = okx_candidate
+        if skip != 'binance' and await validate_binance_ticker(c, binance_candidate):
+            result['binance'] = binance_candidate
+        if skip != 'hyperliquid' and await validate_hyperliquid_ticker(c, 'xyz', hl_candidate):
+            result['hyperliquid_dex'] = 'xyz'
+            result['hyperliquid_coin'] = hl_candidate
+
+    if skip != 'vantage':
+        known_vantage = {s['symbol'] for s in await get_vantage_symbols()}
+        if base_ticker in known_vantage:
+            result['vantage'] = base_ticker
+
     return result
 
 
