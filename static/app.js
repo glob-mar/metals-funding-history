@@ -242,11 +242,30 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify(payload),
       })
       const data = await r.json()
-      if (!data.ok) {
-        statusEl.textContent = '❌ ' + (data.error || 'неизвестная ошибка')
-        return null
+      if (data.ok) return { key: data.asset, merged: false }
+
+      // Актив с таким ключом уже есть (Блок 35) — например, GOOGL уже
+      // заведён с hyperliquid_coin, а сейчас добавляют ещё и okx. Раньше
+      // это просто отказывало («уже существует»), хотя доклеить тикер
+      // другой биржи к существующему активу — валидный сценарий. Пробуем
+      // доклеить через PATCH вместо того, чтобы считать это ошибкой.
+      if (r.status === 409) {
+        statusEl.textContent = `⏳ Актив ${key} уже существует — доклеиваю недостающие тикеры...`
+        const r2 = await fetch(`/api/assets/${encodeURIComponent(key)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(assetDraft),
+        })
+        const data2 = await r2.json()
+        if (!data2.ok) {
+          statusEl.textContent = '❌ ' + (data2.error || 'неизвестная ошибка')
+          return null
+        }
+        return { key: data2.asset, merged: true }
       }
-      return data.asset
+
+      statusEl.textContent = '❌ ' + (data.error || 'неизвестная ошибка')
+      return null
     } catch (e) {
       statusEl.textContent = '❌ Ошибка сети: ' + e.message
       return null
@@ -263,21 +282,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('af-save-btn').addEventListener('click', async () => {
     const statusEl = document.getElementById('asset-form-status')
-    const asset = await saveDraftAsset(statusEl)
-    if (!asset) return
-    statusEl.textContent = `✅ Актив ${asset} добавлен, перезагружаю страницу...`
+    const result = await saveDraftAsset(statusEl)
+    if (!result) return
+    statusEl.textContent = result.merged
+      ? `✅ Тикеры доклеены к активу ${result.key}, перезагружаю страницу...`
+      : `✅ Актив ${result.key} добавлен, перезагружаю страницу...`
     setTimeout(() => location.reload(), 700)
   })
 
   document.getElementById('af-save-continue-btn').addEventListener('click', async () => {
     const statusEl = document.getElementById('asset-form-status')
-    const asset = await saveDraftAsset(statusEl)
-    if (!asset) return
+    const result = await saveDraftAsset(statusEl)
+    if (!result) return
     statusEl.textContent = ''
     const logEl = document.getElementById('af-session-log')
     const reloadRow = logEl.querySelector('.af-log-reload')
     if (reloadRow) reloadRow.remove()
-    logEl.insertAdjacentHTML('beforeend', `<div class="af-log-row ok">✅ ${asset} добавлен</div>`)
+    const msg = result.merged ? `✅ Тикеры доклеены к активу ${result.key}` : `✅ ${result.key} добавлен`
+    logEl.insertAdjacentHTML('beforeend', `<div class="af-log-row ok">${msg}</div>`)
     logEl.insertAdjacentHTML('beforeend',
       '<div class="af-log-row af-log-reload">Добавленные тут активы появятся в списке выше и в пикерах после обновления страницы — <a href="#" id="af-reload-link">обновить сейчас</a>, когда закончишь добавлять.</div>')
     document.getElementById('af-reload-link').addEventListener('click', (e) => { e.preventDefault(); location.reload() })

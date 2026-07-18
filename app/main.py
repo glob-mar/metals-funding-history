@@ -19,7 +19,7 @@ from .db import (
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
     delete_mistagged_price_rows, get_vantage_symbol, update_asset_vantage,
-    retag_price_rows,
+    retag_price_rows, update_asset_tickers,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers
 from . import instruments
@@ -249,6 +249,85 @@ async def patch_asset_vantage(key: str, request: Request):
     await update_asset_vantage(key, vantage)
     await refresh_assets_cache()
     return JSONResponse({'ok': True, 'asset': key, 'vantage': vantage})
+
+
+@app.patch('/api/assets/{key}')
+async def patch_asset_tickers(key: str, request: Request):
+    """Доклейка тикеров к уже существующему активу (Блок 35). Форма
+    добавления актива раньше при повторном сохранении с тем же derived-key
+    (напр. GOOGL уже заведён с hyperliquid_coin, пользователь хочет
+    доклеить okx) натыкалась на 409 у POST /api/assets и просто отказывала —
+    выглядело как «тикер уже добавлен», хотя добавить хотели тикер ДРУГОЙ
+    биржи. Заполняем только пустые поля; если поле уже занято ДРУГИМ
+    значением — не перезаписываем молча, отдаём конфликт явно."""
+    key = key.upper()
+    if key not in ASSETS:
+        return JSONResponse({'ok': False, 'error': f'Актив {key} не найден'}, status_code=404)
+    current = ASSETS[key]
+    body = await request.json()
+    okx = (body.get('okx') or '').strip() or None
+    binance = (body.get('binance') or '').strip() or None
+    hyperliquid_dex = (body.get('hyperliquid_dex') or '').strip() or None
+    hyperliquid_coin = (body.get('hyperliquid_coin') or '').strip() or None
+    vantage = (body.get('vantage') or '').strip() or None
+
+    conflicts = {}
+    for field, new_val in (('okx', okx), ('binance', binance), ('hyperliquid_coin', hyperliquid_coin), ('vantage', vantage)):
+        existing_val = current.get(field)
+        if new_val and existing_val and new_val != existing_val:
+            conflicts[field] = {'existing': existing_val, 'new': new_val}
+    if conflicts:
+        return JSONResponse({
+            'ok': False,
+            'error': 'Поле уже занято другим тикером — замена через форму не делается, чтобы не затереть рабочий тикер молча',
+            'conflicts': conflicts,
+        }, status_code=409)
+
+    # Валидируем только НОВЫЕ поля (пустые в текущем активе) — уже
+    # сохранённые тикеры повторно не дёргаем.
+    new_okx = okx if not current.get('okx') else None
+    new_binance = binance if not current.get('binance') else None
+    new_hl_coin = hyperliquid_coin if not current.get('hyperliquid_coin') else None
+    new_hl_dex = hyperliquid_dex if new_hl_coin else None
+    new_vantage = vantage if not current.get('vantage') else None
+
+    if not any([new_okx, new_binance, new_hl_coin, new_vantage]):
+        return JSONResponse({'ok': False, 'error': 'Нет новых тикеров для добавления — все переданные поля либо пустые, либо уже есть'}, status_code=400)
+
+    if new_hl_coin and not new_hl_dex:
+        return JSONResponse({'ok': False, 'error': 'Для Hyperliquid нужно указать dex (напр. "xyz" или "HyperEVM")'}, status_code=400)
+
+    if new_vantage:
+        known = {s['symbol'] for s in await get_vantage_symbols()}
+        vantage_ok = (new_vantage in known) if known else True
+    else:
+        vantage_ok = True
+
+    try:
+        checks = await validate_asset_tickers(new_okx, new_binance, new_hl_dex, new_hl_coin)
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': f'Ошибка проверки тикеров: {e}'}, status_code=502)
+    checks['vantage'] = vantage_ok
+
+    failed = [ex for ex, ok in checks.items() if not ok and (
+        (ex == 'okx' and new_okx) or (ex == 'binance' and new_binance) or
+        (ex == 'hyperliquid' and new_hl_coin) or (ex == 'vantage' and new_vantage)
+    )]
+    if failed:
+        return JSONResponse({'ok': False, 'error': f'Тикер не подтверждён биржей: {", ".join(failed)}', 'checks': checks}, status_code=422)
+
+    merged = {
+        'okx': current.get('okx') or new_okx,
+        'binance': current.get('binance') or new_binance,
+        'hyperliquid_dex': current.get('hyperliquid_dex') or new_hl_dex,
+        'hyperliquid_coin': current.get('hyperliquid_coin') or new_hl_coin,
+        'vantage': current.get('vantage') or new_vantage,
+    }
+    await update_asset_tickers(key, **merged)
+    await refresh_assets_cache()
+    added = {k: v for k, v in {'okx': new_okx, 'binance': new_binance, 'hyperliquid_coin': new_hl_coin, 'vantage': new_vantage}.items() if v}
+    return JSONResponse({'ok': True, 'asset': key, 'added': added})
 
 
 @app.delete('/api/assets/{key}')

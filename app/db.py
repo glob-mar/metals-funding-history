@@ -182,6 +182,27 @@ async def update_asset_vantage(key: str, vantage: str | None) -> int:
         return cur.rowcount
 
 
+async def update_asset_tickers(key: str, okx: str | None, binance: str | None,
+                                hyperliquid_dex: str | None, hyperliquid_coin: str | None,
+                                vantage: str | None) -> int:
+    """Доклейка тикеров к уже существующему активу (Блок 35) — форма
+    добавления актива раньше могла только создавать новый (POST /api/assets
+    409'ил на существующий key), поэтому добавить тикер второй биржи тому же
+    активу (напр. GOOGL заведён только с hyperliquid_coin, нужен ещё okx) было
+    невозможно через UI. Значения сюда приходят уже смёрженными вызывающим
+    кодом (main.py) — здесь просто перезаписываем все пять полей как есть."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            UPDATE assets SET okx = ?, binance = ?, hyperliquid_dex = ?, hyperliquid_coin = ?, vantage = ?
+            WHERE key = ?
+            """,
+            (okx, binance, hyperliquid_dex, hyperliquid_coin, vantage, key)
+        )
+        await db.commit()
+        return cur.rowcount
+
+
 async def get_vantage_symbol(symbol: str) -> dict | None:
     """Спецификация одного инструмента Vantage (своп/маржа/контракт) — нужна
     фронту для расчёта второй ноги в P&L-симуляторе (Блок 27/32): своп сам по
