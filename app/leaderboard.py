@@ -33,7 +33,7 @@ HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
-CONCURRENCY = 8
+CONCURRENCY = 20
 
 # Металлы по нормализованному тикеру (у разных бирж свои имена одного металла).
 METAL_ALIASES = {
@@ -140,16 +140,22 @@ async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str], bi
 
 
 # ── Сбор фандинга по сырому символу за окно ────────────────────────────────
-# Универсум большой (~330 инструментов), запросов много и они конкурентные —
-# биржи (особенно HL с часовым фандингом = сотни запросов) периодически
-# отвечают 429/5xx. Поэтому каждый запрос идёт через ретрай с экспоненциальным
-# backoff, иначе throttling давал бы тихие пробелы (инструмент с n=0 при том,
-# что данные реально есть).
+# Универсум большой (~330 инструментов, ~1600 HTTP-запросов с пагинацией).
+# С клиентских IP биржи почти не троттлят, но из датацентра Railway латентность
+# выше и бывают 429/5xx. Ключевая оптимизация: единый семафор _SEM ограничивает
+# ОБЩУЮ конкурентность на уровне отдельных запросов (а не инструментов), а
+# HL-чанки (независимые окна времени) тянутся параллельно, а не по одному —
+# иначе часовой фандинг HL (10 чанков на инструмент последовательно) был
+# бутылочным горлышком. Каждый запрос — с быстрым лёгким ретраем на 429/5xx.
 
-async def _get_retry(client, url, params, retries=4):
+_SEM: asyncio.Semaphore | None = None
+
+
+async def _get(client, url, params, retries=4):
     for attempt in range(retries + 1):
         try:
-            r = await client.get(url, params=params, timeout=20.0)
+            async with _SEM:
+                r = await client.get(url, params=params, timeout=20.0)
             if r.status_code == 200:
                 return r
             if r.status_code == 429 or r.status_code >= 500:
@@ -163,10 +169,11 @@ async def _get_retry(client, url, params, retries=4):
     return None
 
 
-async def _post_retry(client, url, body, retries=4):
+async def _post(client, url, body, retries=4):
     for attempt in range(retries + 1):
         try:
-            r = await client.post(url, json=body, timeout=20.0)
+            async with _SEM:
+                r = await client.post(url, json=body, timeout=20.0)
             if r.status_code == 200:
                 return r
             if r.status_code == 429 or r.status_code >= 500:
@@ -183,7 +190,7 @@ async def _post_retry(client, url, body, retries=4):
 async def _binance_funding(client, symbol, start_ms, end_ms) -> list[tuple[int, float]]:
     rows, start = [], start_ms
     while start < end_ms:
-        r = await _get_retry(client, BINANCE_FUNDING_URL, {
+        r = await _get(client, BINANCE_FUNDING_URL, {
             'symbol': symbol, 'startTime': start, 'endTime': end_ms, 'limit': 1000})
         if r is None or r.status_code != 200:
             break
@@ -204,7 +211,7 @@ async def _okx_funding(client, inst, start_ms, end_ms) -> list[tuple[int, float]
         params = {'instId': inst, 'limit': 100}
         if after:
             params['after'] = str(after)
-        r = await _get_retry(client, OKX_FUNDING_URL, params)
+        r = await _get(client, OKX_FUNDING_URL, params)
         if r is None or r.status_code != 200:
             break
         data = r.json().get('data', [])
@@ -223,24 +230,34 @@ async def _okx_funding(client, inst, start_ms, end_ms) -> list[tuple[int, float]
     return rows
 
 
+async def _hl_chunk(client, coin, dex, cs, ce) -> list[tuple[int, float]]:
+    r = await _post(client, HL_URL, {
+        'type': 'fundingHistory', 'coin': coin, 'dex': dex, 'startTime': cs, 'endTime': ce})
+    out = []
+    if r is not None and r.status_code == 200:
+        data = r.json()
+        if isinstance(data, list):
+            out = [(int(d['time']), float(d['fundingRate'])) for d in data]
+    return out
+
+
 async def _hl_funding(client, coin, dex, start_ms, end_ms) -> list[tuple[int, float]]:
-    rows, seen = [], set()
-    chunk_start = start_ms
-    while chunk_start < end_ms:
-        chunk_end = min(chunk_start + HL_CHUNK_MS, end_ms)
-        r = await _post_retry(client, HL_URL, {
-            'type': 'fundingHistory', 'coin': coin, 'dex': dex,
-            'startTime': chunk_start, 'endTime': chunk_end})
-        if r is not None and r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list):
-                for d in data:
-                    ts = int(d['time'])
-                    if ts in seen:
-                        continue
-                    seen.add(ts)
-                    rows.append((ts, float(d['fundingRate'])))
-        chunk_start = chunk_end + 1
+    # Чанки — независимые окна времени, тянем их ПАРАЛЛЕЛЬНО (общий лимит держит
+    # _SEM), а не по одному: это убирает главное бутылочное горлышко HL.
+    windows = []
+    cs = start_ms
+    while cs < end_ms:
+        ce = min(cs + HL_CHUNK_MS, end_ms)
+        windows.append((cs, ce))
+        cs = ce + 1
+    chunks = await asyncio.gather(*(_hl_chunk(client, coin, dex, cs, ce) for cs, ce in windows))
+    seen, rows = set(), []
+    for chunk in chunks:
+        for ts, rate in chunk:
+            if ts in seen:
+                continue
+            seen.add(ts)
+            rows.append((ts, rate))
     return rows
 
 
@@ -279,10 +296,13 @@ def _accumulate(points: list[tuple[int, float]], now_ms: int) -> dict:
 async def refresh_leaderboard() -> dict:
     status.update(running=True, started_at=_now_ms(), finished_at=None,
                   progress=0, total=0, error=None)
+    global _SEM
+    _SEM = asyncio.Semaphore(CONCURRENCY)
     now_ms = _now_ms()
     start_ms = now_ms - WINDOW_DAYS * 86400000
     try:
-        async with httpx.AsyncClient(headers={'User-Agent': 'metals-funding-history/1.0'}) as client:
+        limits = httpx.Limits(max_connections=CONCURRENCY + 4, max_keepalive_connections=CONCURRENCY + 4)
+        async with httpx.AsyncClient(headers={'User-Agent': 'metals-funding-history/1.0'}, limits=limits) as client:
             binance = await _binance_universe(client)
             binance_class = {i['base'].upper(): i['cls'] for i in binance}
             hl = await _hl_universe(client, binance_class)
@@ -291,22 +311,23 @@ async def refresh_leaderboard() -> dict:
             universe = binance + hl + okx
             status['total'] = len(universe)
 
-            sem = asyncio.Semaphore(CONCURRENCY)
             rows = []
 
+            # Конкурентность держит _SEM на уровне отдельных HTTP-запросов, поэтому
+            # сами инструменты можно запускать все разом — HL-чанки внутри тоже
+            # уходят в общий пул и параллелятся между инструментами.
             async def work(item):
-                async with sem:
-                    try:
-                        pts = await _fetch_funding(client, item, start_ms, now_ms)
-                        acc = _accumulate(pts, now_ms)
-                        rows.append({
-                            'exchange': item['exchange'], 'symbol': item['symbol'],
-                            'base': item['base'], 'cls': item['cls'], 'periods': acc,
-                        })
-                    except Exception as e:
-                        print(f"leaderboard {item['exchange']}:{item['symbol']} err: {e}")
-                    finally:
-                        status['progress'] += 1
+                try:
+                    pts = await _fetch_funding(client, item, start_ms, now_ms)
+                    acc = _accumulate(pts, now_ms)
+                    rows.append({
+                        'exchange': item['exchange'], 'symbol': item['symbol'],
+                        'base': item['base'], 'cls': item['cls'], 'periods': acc,
+                    })
+                except Exception as e:
+                    print(f"leaderboard {item['exchange']}:{item['symbol']} err: {e}")
+                finally:
+                    status['progress'] += 1
 
             await asyncio.gather(*(work(i) for i in universe))
 
