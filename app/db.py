@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS vantage_symbols (
     spread         REAL,
     updated_at     INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS leaderboard_cache (
+    key         TEXT    PRIMARY KEY,
+    data        TEXT    NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
 """
 
 
@@ -344,3 +350,29 @@ async def get_price_history(asset: str) -> list[dict]:
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+
+async def set_leaderboard_cache(key: str, data_json: str) -> None:
+    """Готовый рейтинг топ-фандинга (Блок 39) — храним ТОЛЬКО посчитанный
+    результат (все периоды сразу), а не всю историю фандинга универсума.
+    Пересчитывается по кнопке «Обновить»; между обновлениями отдаётся отсюда."""
+    now_ms = int(time.time() * 1000)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO leaderboard_cache (key, data, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+            """,
+            (key, data_json, now_ms)
+        )
+        await db.commit()
+
+
+async def get_leaderboard_cache(key: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT data, updated_at FROM leaderboard_cache WHERE key = ?", (key,)
+        )
+        row = await cur.fetchone()
+        return {'data': row['data'], 'updated_at': row['updated_at']} if row else None

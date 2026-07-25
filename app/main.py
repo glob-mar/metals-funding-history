@@ -19,10 +19,11 @@ from .db import (
     seed_assets_if_empty, get_all_assets, insert_asset, delete_asset,
     upsert_vantage_symbols, get_vantage_symbols, get_vantage_price_summary,
     delete_mistagged_price_rows, get_vantage_symbol, update_asset_vantage,
-    retag_price_rows, update_asset_tickers,
+    retag_price_rows, update_asset_tickers, get_leaderboard_cache,
 )
 from .services import collect, collect_prices, collect_live, validate_asset_tickers, auto_match_ticker
 from . import instruments
+from . import leaderboard
 from .metrics import periods_per_year, interval_label
 from .analysis import exchange_stats, monthly_table, funding_price_correlation
 from . import scheduler
@@ -153,6 +154,58 @@ async def instruments_vantage():
     except Exception as e:
         print(traceback.format_exc())
         return JSONResponse({'ok': False, 'error': str(e)}, status_code=500)
+
+
+@app.get('/api/leaderboard')
+async def leaderboard_get():
+    """Готовый рейтинг топ-фандинга из кэша (Блок 39) — все периоды сразу,
+    фронт сам фильтрует по классу/бирже/стороне и переключает период без
+    пересчёта. Пусто, если ни разу не обновляли."""
+    cached = await get_leaderboard_cache('latest')
+    if not cached:
+        return JSONResponse({'ok': True, 'data': None, 'updated_at': None})
+    return JSONResponse({'ok': True, 'data': json.loads(cached['data']), 'updated_at': cached['updated_at']})
+
+
+@app.get('/api/leaderboard/status')
+async def leaderboard_status():
+    return JSONResponse({'ok': True, **leaderboard.status})
+
+
+@app.post('/api/leaderboard/refresh')
+async def leaderboard_refresh():
+    """Запускает пересчёт рейтинга в ФОНЕ (операция тяжёлая, ~1-2 мин) —
+    возвращается сразу, прогресс смотреть через /api/leaderboard/status."""
+    if leaderboard.status.get('running'):
+        return JSONResponse({'ok': True, 'already_running': True, **leaderboard.status})
+    asyncio.create_task(leaderboard.refresh_leaderboard())
+    return JSONResponse({'ok': True, 'started': True})
+
+
+@app.post('/api/leaderboard/add')
+async def leaderboard_add(request: Request):
+    """Добавить инструмент из строки рейтинга в дашборд одной кнопкой (Блок 39) —
+    по базовому тикеру автопоиском находим его на всех биржах (как в форме) и
+    заводим актив. Если актив с таким ключом уже есть — не ошибка, сообщаем."""
+    body = await request.json()
+    base = (body.get('base') or '').strip().upper()
+    if not base or not base.replace('_', '').isalnum():
+        return JSONResponse({'ok': False, 'error': 'Некорректный тикер'}, status_code=400)
+    if base in ASSETS:
+        return JSONResponse({'ok': False, 'error': f'Актив {base} уже есть в дашборде', 'exists': True}, status_code=409)
+    try:
+        m = await auto_match_ticker(base)
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse({'ok': False, 'error': f'Ошибка автопоиска: {e}'}, status_code=502)
+    if not any([m.get('okx'), m.get('binance'), m.get('hyperliquid_coin'), m.get('vantage')]):
+        return JSONResponse({'ok': False, 'error': 'Не удалось подтвердить тикер ни на одной бирже'}, status_code=422)
+    await insert_asset(base, base, m.get('okx'), m.get('binance'),
+                       m.get('hyperliquid_dex'), m.get('hyperliquid_coin'), m.get('vantage'))
+    await refresh_assets_cache()
+    added = {k: v for k, v in {'okx': m.get('okx'), 'binance': m.get('binance'),
+             'hyperliquid_coin': m.get('hyperliquid_coin'), 'vantage': m.get('vantage')}.items() if v}
+    return JSONResponse({'ok': True, 'asset': base, 'added': added})
 
 
 @app.get('/api/instruments/auto-match')
