@@ -98,10 +98,37 @@ def _classify_ref(base: str, binance_class: dict) -> str:
 
 
 # ── Универсум ──────────────────────────────────────────────────────────────
+# Перечисление — всего 3 запроса, но критичные: если один зафейлит (троттлинг),
+# универсум усечётся и склейка не сможет добрать пропавшие инструменты. Поэтому
+# у них свой упорный ретрай, и при полном провале — исключение (лучше уронить
+# обновление, чем молча собрать неполный список).
+
+async def _enum_get(client, url, params=None):
+    for attempt in range(5):
+        try:
+            r = await client.get(url, params=params, timeout=25.0)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        await asyncio.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f'enum GET failed: {url}')
+
+
+async def _enum_post(client, url, body):
+    for attempt in range(5):
+        try:
+            r = await client.post(url, json=body, timeout=25.0)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        await asyncio.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f'enum POST failed: {url}')
+
 
 async def _binance_universe(client: httpx.AsyncClient) -> list[dict]:
-    r = await client.get(BINANCE_EXCHANGE_INFO_URL, timeout=20.0)
-    data = r.json().get('symbols', [])
+    data = (await _enum_get(client, BINANCE_EXCHANGE_INFO_URL)).get('symbols', [])
     out = []
     for s in data:
         if s.get('status') != 'TRADING':
@@ -119,8 +146,7 @@ async def _binance_universe(client: httpx.AsyncClient) -> list[dict]:
 
 
 async def _hl_universe(client: httpx.AsyncClient, binance_class: dict) -> list[dict]:
-    r = await client.post(HL_URL, json={'type': 'meta', 'dex': 'xyz'}, timeout=20.0)
-    data = r.json()
+    data = await _enum_post(client, HL_URL, {'type': 'meta', 'dex': 'xyz'})
     uni = data.get('universe', []) if isinstance(data, dict) else []
     out = []
     for u in uni:
@@ -134,8 +160,7 @@ async def _hl_universe(client: httpx.AsyncClient, binance_class: dict) -> list[d
 
 
 async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str], binance_class: dict) -> list[dict]:
-    r = await client.get(OKX_INSTRUMENTS_URL, params={'instType': 'SWAP'}, timeout=20.0)
-    data = r.json().get('data', [])
+    data = (await _enum_get(client, OKX_INSTRUMENTS_URL, {'instType': 'SWAP'})).get('data', [])
     out = []
     for d in data:
         if d.get('state') != 'live' or not d['instId'].endswith('-USDT-SWAP'):
