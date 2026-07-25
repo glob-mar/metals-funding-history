@@ -33,7 +33,7 @@ HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
-CONCURRENCY = 6
+CONCURRENCY = 8
 
 # Металлы по нормализованному тикеру (у разных бирж свои имена одного металла).
 METAL_ALIASES = {
@@ -153,13 +153,13 @@ async def _get_retry(client, url, params, retries=4):
             if r.status_code == 200:
                 return r
             if r.status_code == 429 or r.status_code >= 500:
-                await asyncio.sleep(0.4 * (2 ** attempt))
+                await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
                 continue
             return r
         except Exception:
             if attempt == retries:
                 return None
-            await asyncio.sleep(0.4 * (2 ** attempt))
+            await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
     return None
 
 
@@ -170,13 +170,13 @@ async def _post_retry(client, url, body, retries=4):
             if r.status_code == 200:
                 return r
             if r.status_code == 429 or r.status_code >= 500:
-                await asyncio.sleep(0.4 * (2 ** attempt))
+                await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
                 continue
             return r
         except Exception:
             if attempt == retries:
                 return None
-            await asyncio.sleep(0.4 * (2 ** attempt))
+            await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
     return None
 
 
