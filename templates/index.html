@@ -16,6 +16,56 @@
     <h1 class="a-title">📊 Аналитика по фандингу</h1>
   </div>
 
+  <details class="lb-section" id="lb-section">
+    <summary>🏆 Топ по накопленному фандингу <span class="lb-updated" id="lb-updated"></span></summary>
+    <div class="lb-body">
+      <p class="lb-explain">Рейтинг некрипто-инструментов (металлы, акции, сырьё) по <b>накопленному фандингу</b> за период — сколько суммарно заработал бы шорт (или лонг), просто держа позицию. Считается по всем инструментам Hyperliquid / Binance / OKX сразу, без ручного добавления. Данные исторические (не за день), пересчёт — по кнопке «Обновить сейчас».</p>
+      <div class="lb-controls">
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Период</span>
+          <div class="pill-row" id="lb-period">
+            <button class="pill" data-period="1m">1м</button>
+            <button class="pill active" data-period="2m">2м</button>
+            <button class="pill" data-period="3m">3м</button>
+            <button class="pill" data-period="6m">6м</button>
+          </div>
+        </div>
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Класс</span>
+          <div class="pill-row" id="lb-class">
+            <button class="pill active" data-class="all">Все</button>
+            <button class="pill" data-class="metal">Металлы</button>
+            <button class="pill" data-class="stock">Акции</button>
+            <button class="pill" data-class="commodity">Сырьё</button>
+          </div>
+        </div>
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Биржа</span>
+          <div class="pill-row" id="lb-exchange">
+            <button class="pill active" data-exchange="all">Все</button>
+            <button class="pill" data-exchange="hyperliquid">HL</button>
+            <button class="pill" data-exchange="binance">Binance</button>
+            <button class="pill" data-exchange="okx">OKX</button>
+          </div>
+        </div>
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Сторона
+            <span class="info-tip" data-tip="Шорт-карри — вверху те, где шорт больше всего заработал на фандинге (фандинг положительный). Лонг-карри — наоборот, где платят лонгам (фандинг отрицательный).">ⓘ</span>
+          </span>
+          <div class="pill-row" id="lb-side">
+            <button class="pill active" data-side="short">Шорт-карри</button>
+            <button class="pill" data-side="long">Лонг-карри</button>
+          </div>
+        </div>
+        <button class="btn blue" id="lb-refresh-btn">Обновить сейчас</button>
+      </div>
+      <div class="lb-status" id="lb-status"></div>
+      <div class="table-scroll">
+        <table class="lb-table" id="lb-table"></table>
+      </div>
+    </div>
+  </details>
+
   <div class="picker-row">
     <div class="picker-group">
       <span class="picker-label">Биржа</span>
@@ -356,5 +406,6 @@
 <script src="/static/echarts.min.js?v={{ v }}"></script>
 <script src="/static/analysis.js?v={{ v }}"></script>
 <script src="/static/app.js?v={{ v }}"></script>
+<script src="/static/leaderboard.js?v={{ v }}"></script>
 </body>
 </html>
