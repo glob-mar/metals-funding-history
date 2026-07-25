@@ -19,15 +19,21 @@
   <details class="lb-section" id="lb-section">
     <summary>🏆 Топ по накопленному фандингу <span class="lb-updated" id="lb-updated"></span></summary>
     <div class="lb-body">
-      <p class="lb-explain">Рейтинг некрипто-инструментов (металлы, акции, сырьё) по <b>накопленному фандингу</b> за период — сколько суммарно заработал бы шорт (или лонг), просто держа позицию. Считается по всем инструментам Hyperliquid / Binance / OKX сразу, без ручного добавления. Данные исторические (не за день), пересчёт — по кнопке «Обновить сейчас».</p>
+      <p class="lb-explain">Рейтинг некрипто-инструментов (металлы, акции, сырьё) по <b>накопленному фандингу</b> за период — сколько суммарно заработал бы шорт (или лонг), просто держа позицию. Считается по всем инструментам Hyperliquid / Binance / OKX сразу, без ручного добавления. Период задаётся <b>произвольным диапазоном дат</b> (или быстрыми пресетами), плюс ликвидность (OI / оборот), стабильность и <b>нетто</b> за вычетом второй ноги Vantage. Данные исторические, пересчёт — по кнопке «Обновить сейчас».</p>
       <div class="lb-controls">
-        <div class="lb-ctl-group">
+        <div class="lb-ctl-group lb-period-group">
           <span class="lb-ctl-label">Период</span>
+          <div class="lb-daterange">
+            <input type="date" id="lb-from" class="lb-date">
+            <span class="lb-dash">—</span>
+            <input type="date" id="lb-to" class="lb-date">
+          </div>
           <div class="pill-row" id="lb-period">
-            <button class="pill" data-period="1m">1м</button>
-            <button class="pill active" data-period="2m">2м</button>
-            <button class="pill" data-period="3m">3м</button>
-            <button class="pill" data-period="6m">6м</button>
+            <button class="pill" data-days="7">7д</button>
+            <button class="pill" data-days="30">1м</button>
+            <button class="pill active" data-days="60">2м</button>
+            <button class="pill" data-days="90">3м</button>
+            <button class="pill" data-days="182">6м</button>
           </div>
         </div>
         <div class="lb-ctl-group">
@@ -55,6 +61,17 @@
           <div class="pill-row" id="lb-side">
             <button class="pill active" data-side="short">Шорт-карри</button>
             <button class="pill" data-side="long">Лонг-карри</button>
+          </div>
+        </div>
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Ликвидность
+            <span class="info-tip" data-tip="Скрыть неликвид: показывать только инструменты с суточным оборотом выше порога.">ⓘ</span>
+          </span>
+          <div class="pill-row" id="lb-minvol">
+            <button class="pill active" data-minvol="0">любая</button>
+            <button class="pill" data-minvol="1000000">&gt;$1M</button>
+            <button class="pill" data-minvol="10000000">&gt;$10M</button>
+            <button class="pill" data-minvol="100000000">&gt;$100M</button>
           </div>
         </div>
         <button class="btn blue" id="lb-refresh-btn">Обновить сейчас</button>

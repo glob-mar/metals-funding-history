@@ -114,10 +114,22 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 .lb-cls-metal { background: #9e6a0322; color: #d29922; border: 1px solid #d2992244; }
 .lb-cls-stock { background: #388bfd22; color: #58a6ff; border: 1px solid #58a6ff44; }
 .lb-cls-commodity { background: #8957e522; color: #a371f7; border: 1px solid #a371f744; }
-.lb-add-btn { border: 1px solid var(--border-default); background: var(--surface-2); color: var(--text-secondary); border-radius: var(--r-ctl); padding: .2rem .5rem; font-size: .75rem; cursor: pointer; }
+.lb-add-btn { border: 1px solid var(--border-default); background: var(--surface-2); color: var(--text-secondary); border-radius: var(--r-ctl); padding: .1rem .45rem; font-size: .82rem; line-height: 1; cursor: pointer; }
 .lb-add-btn:hover { color: #fff; background: var(--action-green); border-color: var(--action-green); }
 .lb-add-btn:disabled { opacity: .55; cursor: default; }
-.lb-have { font-size: .72rem; color: #3fb950; }
+.lb-have { font-size: .82rem; color: #3fb950; }
+/* Период — диапазон дат + пресеты (Блок 40) */
+.lb-period-group { min-width: 0; }
+.lb-daterange { display: flex; align-items: center; gap: .3rem; margin-bottom: .35rem; }
+.lb-date { background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--r-ctl); color: var(--text-primary); padding: .3rem .4rem; font-size: .78rem; font-family: inherit; color-scheme: dark; }
+.lb-date:focus { outline: none; border-color: var(--action-blue); }
+.lb-dash { color: var(--text-tertiary); }
+/* Сортируемые заголовки + новые ячейки (Блок 40) */
+.lb-table th.lb-sortable { cursor: pointer; user-select: none; }
+.lb-table th.lb-sortable:hover { color: var(--text-primary); }
+.lb-net { font-weight: 600; }
+.lb-vflag { color: #58a6ff; cursor: help; }
+.lb-muted { color: var(--text-tertiary); }
 
 #af-session-log { font-size: .82rem; color: #8b949e; margin-top: .3rem; }
 #af-session-log .af-log-row { padding: .15rem 0; }

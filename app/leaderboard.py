@@ -19,12 +19,16 @@ import json
 import traceback
 import httpx
 
-from .db import set_leaderboard_cache, get_leaderboard_cache
+from .db import set_leaderboard_cache, get_leaderboard_cache, get_vantage_symbols
 
 OKX_FUNDING_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 OKX_INSTRUMENTS_URL = 'https://www.okx.com/api/v5/public/instruments'
+OKX_OI_URL = 'https://www.okx.com/api/v5/public/open-interest'
+OKX_TICKERS_URL = 'https://www.okx.com/api/v5/market/tickers'
 BINANCE_FUNDING_URL = 'https://fapi.binance.com/fapi/v1/fundingRate'
 BINANCE_EXCHANGE_INFO_URL = 'https://fapi.binance.com/fapi/v1/exchangeInfo'
+BINANCE_TICKER24_URL = 'https://fapi.binance.com/fapi/v1/ticker/24hr'
+BINANCE_OI_URL = 'https://fapi.binance.com/fapi/v1/openInterest'
 HL_URL = 'https://api.hyperliquid.xyz/info'
 
 # Часовой фандинг у HL даёт много точек — берём куски по 20 дней (20*24=480 < 500,
@@ -32,7 +36,19 @@ HL_URL = 'https://api.hyperliquid.xyz/info'
 HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
-PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
+# С Блока 40 период НЕ фиксирован: храним по каждому инструменту компактный
+# дневной ряд фандинга (d0 + dv), а любую сумму за произвольное окно [с..по]
+# считает фронт на клиенте. Это остаётся «только рейтингом» — сырую поминутную
+# историю фандинга не храним, лишь суточные суммы ставок.
+DAY_MS = 86400000
+
+# Режимы свопа MQL5 (см. Инструкцию Блок 33 и analysis.js) — своп у Vantage
+# либо в пунктах (металлы/EUR), либо в годовых % (акции, банковский год 360),
+# либо выключен. EA с Блока 33 шлёт имя режима строкой (EnumToString), старый
+# кэш мог быть числом — поддерживаем оба.
+SWAP_MODE_DISABLED = {0, 'SYMBOL_SWAP_MODE_DISABLED'}
+SWAP_MODE_POINTS = {1, 'SYMBOL_SWAP_MODE_POINTS'}
+SWAP_MODE_ANNUAL_PCT = {5, 'SYMBOL_SWAP_MODE_INTEREST_CURRENT'}
 # Строку из прошлого кеша, которую в этот раз не удалось пересобрать (недобор
 # HL из-за троттлинга), храним не дольше этого срока — иначе делистнутые/мёртвые
 # инструменты висели бы вечно. За 1-2 обновления недобор обычно закрывается.
@@ -298,23 +314,156 @@ async def _fetch_funding(client, item, start_ms, end_ms) -> list[tuple[int, floa
     return []
 
 
-# ── Накопление по периодам ─────────────────────────────────────────────────
+# ── Дневной ряд фандинга (Блок 40) ─────────────────────────────────────────
 
-def _accumulate(points: list[tuple[int, float]], now_ms: int) -> dict:
-    """По списку (ts, rate) считает по каждому периоду: сумму ставок (в %),
-    APR (годовая экстраполяция по реально покрытому периоду) и число точек."""
-    out = {}
-    for name, days in PERIODS.items():
-        cutoff = now_ms - days * 86400000
-        pts = [(t, r) for t, r in points if t >= cutoff]
-        if not pts:
-            out[name] = {'sum_pct': 0.0, 'apr': None, 'n': 0}
-            continue
-        s = sum(r for _, r in pts) * 100.0
-        span_days = (max(t for t, _ in pts) - min(t for t, _ in pts)) / 86400000
-        apr = (s / span_days * 365) if span_days >= 1 else None
-        out[name] = {'sum_pct': round(s, 4), 'apr': round(apr, 2) if apr is not None else None, 'n': len(pts)}
+def _daily(points: list[tuple[int, float]]) -> tuple[int | None, list]:
+    """Свёртка (ts, rate) в суточные суммы ставок (в %). Возвращает (d0, dv):
+    d0 — номер суток (epoch-день) первого дня с данными, dv — плоский массив
+    суточных сумм от d0 до последнего дня включительно; дни без данных — None
+    (чтобы отличать реальный пропуск от честного нуля и точно считать покрытие).
+    Из этого фронт складывает сумму за любое окно [с..по] сам."""
+    if not points:
+        return None, []
+    buckets: dict[int, float] = {}
+    for t, r in points:
+        day = t // DAY_MS
+        buckets[day] = buckets.get(day, 0.0) + r
+    d0, d1 = min(buckets), max(buckets)
+    dv = []
+    for day in range(d0, d1 + 1):
+        v = buckets.get(day)
+        dv.append(round(v * 100.0, 5) if v is not None else None)
+    return d0, dv
+
+
+# ── Ликвидность: OI + оборот 24ч в $ (Блок 40) ─────────────────────────────
+# Прокси глубины стакана — «сколько денег в инструменте» и суточный оборот.
+# Голый фандинг бесполезен, если в инструмент не влезть объёмом. Тянем
+# батч-эндпоинтами, где можно (OKX/HL — 1-2 запроса на всё), Binance OI —
+# поштучно (батча нет на fapi), но только по некрипто-универсуму (~130 шт).
+
+async def _binance_liquidity(client, symbols: set[str]) -> dict:
+    out: dict = {}
+    r = await _get(client, BINANCE_TICKER24_URL, None)
+    tick = {}
+    if r is not None and r.status_code == 200:
+        body = r.json()
+        if isinstance(body, list):
+            tick = {d['symbol']: d for d in body}
+
+    async def one(sym):
+        t = tick.get(sym)
+        price = float(t['lastPrice']) if t and t.get('lastPrice') else None
+        vol = float(t['quoteVolume']) if t and t.get('quoteVolume') else None
+        oi = None
+        ro = await _get(client, BINANCE_OI_URL, {'symbol': sym})
+        if ro is not None and ro.status_code == 200:
+            try:
+                oi_c = float(ro.json().get('openInterest'))
+                oi = oi_c * price if price else None
+            except Exception:
+                pass
+        out[('binance', sym)] = {'oi': oi, 'vol': vol, 'price': price}
+
+    await asyncio.gather(*(one(s) for s in symbols))
     return out
+
+
+async def _okx_liquidity(client, insts: set[str]) -> dict:
+    oi_map, tk_map = {}, {}
+    r_oi = await _get(client, OKX_OI_URL, {'instType': 'SWAP'})
+    if r_oi is not None and r_oi.status_code == 200:
+        oi_map = {d['instId']: d for d in r_oi.json().get('data', [])}
+    r_tk = await _get(client, OKX_TICKERS_URL, {'instType': 'SWAP'})
+    if r_tk is not None and r_tk.status_code == 200:
+        tk_map = {d['instId']: d for d in r_tk.json().get('data', [])}
+    out: dict = {}
+    for inst in insts:
+        tk, oi = tk_map.get(inst), oi_map.get(inst)
+        price = float(tk['last']) if tk and tk.get('last') else None
+        vol = float(tk['volCcy24h']) * price if tk and tk.get('volCcy24h') and price else None
+        oi_usd = float(oi['oiCcy']) * price if oi and oi.get('oiCcy') and price else None
+        out[('okx', inst)] = {'oi': oi_usd, 'vol': vol, 'price': price}
+    return out
+
+
+async def _hl_liquidity(client) -> dict:
+    out: dict = {}
+    try:
+        r = await client.post(HL_URL, json={'type': 'metaAndAssetCtxs', 'dex': 'xyz'}, timeout=25.0)
+        if r.status_code != 200:
+            return out
+        data = r.json()
+        if not isinstance(data, list) or len(data) < 2:
+            return out
+        names = [u['name'] for u in data[0].get('universe', [])]
+        ctxs = data[1]
+        for i, name in enumerate(names):
+            if i >= len(ctxs):
+                break
+            ctx = ctxs[i]
+            mark = float(ctx['markPx']) if ctx.get('markPx') else None
+            oi = float(ctx['openInterest']) * mark if ctx.get('openInterest') and mark else None
+            vol = float(ctx['dayNtlVlm']) if ctx.get('dayNtlVlm') else None  # уже в $
+            out[('hyperliquid', name)] = {'oi': oi, 'vol': vol, 'price': mark}
+    except Exception as e:
+        print(f'leaderboard HL liquidity err: {e}')
+    return out
+
+
+# ── Vantage: своп %/ночь + спред % (Блок 40) ───────────────────────────────
+# Помечаем инструменты, которые есть на Vantage (хеджируемы второй ногой), и
+# считаем норму свопа/спреда, чтобы фронт мог показать НЕТТО (фандинг минус
+# издержки второй ноги). Формулы — те же, что в analysis.js (swapPctPerNight).
+
+def _swap_night_pct(vs: dict, price: float | None) -> tuple[float | None, float | None]:
+    """(swap_long, swap_short) в % от ноционала за ночь. POINTS требует цену
+    инструмента (берём live-цену с крипто-биржи — металл ~= один и тот же
+    уровень); годовой режим (акции) от цены не зависит (делим на 360)."""
+    mode = vs.get('swap_mode')
+    sl, ss, digits = vs.get('swap_long'), vs.get('swap_short'), vs.get('digits')
+    if mode in SWAP_MODE_DISABLED:
+        return 0.0, 0.0
+    if mode in SWAP_MODE_POINTS:
+        if not price or sl is None or ss is None or digits is None:
+            return None, None
+        point = 10.0 ** (-digits)
+        return sl * point / price * 100, ss * point / price * 100
+    if mode in SWAP_MODE_ANNUAL_PCT:
+        if sl is None or ss is None:
+            return None, None
+        return sl / 360.0, ss / 360.0
+    return None, None
+
+
+def _build_vantage_matcher(vsyms: list[dict]):
+    vmap = {s['symbol'].upper(): s for s in vsyms}
+
+    def match(base: str) -> dict | None:
+        norm = base.upper()
+        cands = []
+        if norm in METAL_ALIASES:
+            m = METAL_ALIASES[norm]
+            cands += [m + 'USD', m]
+        cands += [norm, norm + 'USD']
+        for c in cands:
+            if c in vmap:
+                return vmap[c]
+        return None
+
+    return match
+
+
+def _vantage_row(vs: dict, price: float | None) -> dict:
+    ln, sn = _swap_night_pct(vs, price)
+    spread = vs.get('spread')
+    spread_pct = (spread / price * 100) if (spread is not None and price) else None
+    return {
+        'symbol': vs['symbol'],
+        'swap_long_night': round(ln, 6) if ln is not None else None,
+        'swap_short_night': round(sn, 6) if sn is not None else None,
+        'spread_pct': round(spread_pct, 5) if spread_pct is not None else None,
+    }
 
 
 # ── Оркестрация ────────────────────────────────────────────────────────────
@@ -337,21 +486,53 @@ async def refresh_leaderboard() -> dict:
             universe = binance + hl + okx
             status['total'] = len(universe)
 
+            # Ликвидность (Блок 40) — собираем один раз батчами до основного
+            # прохода: OKX/HL отдают всё за 1-2 запроса, Binance OI — поштучно.
+            liq: dict = {}
+            try:
+                b_syms = {i['symbol'] for i in binance}
+                o_insts = {i['symbol'] for i in okx}
+                b_liq, o_liq, h_liq = await asyncio.gather(
+                    _binance_liquidity(client, b_syms),
+                    _okx_liquidity(client, o_insts),
+                    _hl_liquidity(client),
+                )
+                liq.update(b_liq); liq.update(o_liq); liq.update(h_liq)
+            except Exception as e:
+                print(f'leaderboard liquidity err: {e}')
+
+            # Vantage-матчер (Блок 40) — из кэша vantage_symbols, для флага
+            # «есть на Vantage» и расчёта нетто (своп/спред второй ноги).
+            try:
+                vantage_match = _build_vantage_matcher(await get_vantage_symbols())
+            except Exception as e:
+                print(f'leaderboard vantage load err: {e}')
+                vantage_match = lambda base: None
+
             fresh = {}   # (exchange, symbol) -> строка, успешно собранная СЕЙЧАС
 
             async def work(item):
                 try:
                     pts = await _fetch_funding(client, item, start_ms, now_ms)
-                    acc = _accumulate(pts, now_ms)
-                    # Кладём только строки, где реально есть данные хоть в одном
-                    # периоде. Инструменты с недобором (все n=0) в этот раз
-                    # пропускаем — их закроет склейка с прошлым кешем ниже.
-                    if any(acc[p]['n'] > 0 for p in PERIODS):
-                        fresh[(item['exchange'], item['symbol'])] = {
-                            'exchange': item['exchange'], 'symbol': item['symbol'],
-                            'base': item['base'], 'cls': item['cls'], 'periods': acc,
-                            'updated_at': now_ms,
-                        }
+                    d0, dv = _daily(pts)
+                    # Кладём только строки, где реально собрались данные. Недобор
+                    # (dv пустой) в этот раз пропускаем — закроет склейка ниже.
+                    if not dv or not any(x is not None for x in dv):
+                        return
+                    key = (item['exchange'], item['symbol'])
+                    lq = liq.get(key) or {}
+                    vs = vantage_match(item['base'])
+                    row = {
+                        'exchange': item['exchange'], 'symbol': item['symbol'],
+                        'base': item['base'], 'cls': item['cls'],
+                        'd0': d0, 'dv': dv,
+                        'oi': round(lq['oi']) if lq.get('oi') is not None else None,
+                        'vol': round(lq['vol']) if lq.get('vol') is not None else None,
+                        'updated_at': now_ms,
+                    }
+                    if vs:
+                        row['vantage'] = _vantage_row(vs, lq.get('price'))
+                    fresh[key] = row
                 except Exception as e:
                     print(f"leaderboard {item['exchange']}:{item['symbol']} err: {e}")
                 finally:
@@ -365,17 +546,20 @@ async def refresh_leaderboard() -> dict:
         # в этот раз не собрались, — оставляем последнее известное значение из
         # прошлого кеша (не старше STALE_KEEP_DAYS). За 1-2 «Обновить» HL
         # добирается до 100%. Это остаётся «только рейтингом» — храним лишь
-        # посчитанные строки, не сырую историю фандинга.
+        # посчитанные строки, не сырую историю фандинга. Строки старого формата
+        # (без дневного ряда dv, Блок 39) отбрасываем — фронт их не отрисует.
         merged = {}
         prev = await get_leaderboard_cache('latest')
         if prev:
             for row in json.loads(prev['data']).get('rows', []):
+                if 'dv' not in row:
+                    continue
                 if now_ms - row.get('updated_at', 0) <= STALE_KEEP_DAYS * 86400000:
                     merged[(row['exchange'], row['symbol'])] = row
         merged.update(fresh)   # свежие перекрывают старые
         rows = list(merged.values())
 
-        payload = {'rows': rows, 'periods': list(PERIODS.keys()),
+        payload = {'rows': rows, 'day_ms': DAY_MS,
                    'computed_at': now_ms, 'universe_size': len(universe),
                    'fresh_count': len(fresh)}
         await set_leaderboard_cache('latest', json.dumps(payload, ensure_ascii=False))
