@@ -19,7 +19,7 @@ import json
 import traceback
 import httpx
 
-from .db import set_leaderboard_cache
+from .db import set_leaderboard_cache, get_leaderboard_cache
 
 OKX_FUNDING_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 OKX_INSTRUMENTS_URL = 'https://www.okx.com/api/v5/public/instruments'
@@ -33,6 +33,10 @@ HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
+# Строку из прошлого кеша, которую в этот раз не удалось пересобрать (недобор
+# HL из-за троттлинга), храним не дольше этого срока — иначе делистнутые/мёртвые
+# инструменты висели бы вечно. За 1-2 обновления недобор обычно закрывается.
+STALE_KEEP_DAYS = 10
 # Единый лимит конкурентности. Важный урок (см. Инструкцию, Блок 39): агрессивные
 # ретраи HL дают ШТОРМ — упавшие чанки повторяются пачкой и сами поддерживают
 # throttle, из-за чего полный сбор захлёбывался (до 63/88 HL с n=0). Быстрый
@@ -242,22 +246,19 @@ async def _hl_chunk(client, coin, dex, cs, ce, retries=2) -> list[tuple[int, flo
 
 
 async def _hl_funding(client, coin, dex, start_ms, end_ms) -> list[tuple[int, float]]:
-    # Чанки — независимые окна времени, тянем их ПАРАЛЛЕЛЬНО (лимит держит
-    # _SEM), а не по одному: это убирает главное бутылочное горлышко HL.
-    windows = []
+    # Чанки тянем ПОСЛЕДОВАТЕЛЬНО (по одному на инструмент за раз): параллельный
+    # залп из ~10 чанков на монету бьёт HL пачкой и сильнее срывает throttle
+    # (проверено: параллельно 26/88 HL, последовательно ~73/88). Полноту до
+    # 100% добирает склейка с прошлым кешем между обновлениями.
+    seen, rows = set(), []
     cs = start_ms
     while cs < end_ms:
         ce = min(cs + HL_CHUNK_MS, end_ms)
-        windows.append((cs, ce))
+        for ts, rate in await _hl_chunk(client, coin, dex, cs, ce):
+            if ts not in seen:
+                seen.add(ts)
+                rows.append((ts, rate))
         cs = ce + 1
-    chunks = await asyncio.gather(*(_hl_chunk(client, coin, dex, cs, ce) for cs, ce in windows))
-    seen, rows = set(), []
-    for chunk in chunks:
-        for ts, rate in chunk:
-            if ts in seen:
-                continue
-            seen.add(ts)
-            rows.append((ts, rate))
     return rows
 
 
@@ -311,23 +312,21 @@ async def refresh_leaderboard() -> dict:
             universe = binance + hl + okx
             status['total'] = len(universe)
 
-            rows = []
+            fresh = {}   # (exchange, symbol) -> строка, успешно собранная СЕЙЧАС
 
-            # Конкурентность держит _SEM на уровне отдельных HTTP-запросов, поэтому
-            # сами инструменты можно запускать все разом — HL-чанки внутри тоже
-            # уходят в общий пул и параллелятся между инструментами.
             async def work(item):
                 try:
                     pts = await _fetch_funding(client, item, start_ms, now_ms)
                     acc = _accumulate(pts, now_ms)
-                    # Строки совсем без данных (все периоды n=0 — либо недобор
-                    # из-за троттлинга, либо инструмент реально без фандинга)
-                    # не кладём в рейтинг: не мусорим и не путаем нулями.
+                    # Кладём только строки, где реально есть данные хоть в одном
+                    # периоде. Инструменты с недобором (все n=0) в этот раз
+                    # пропускаем — их закроет склейка с прошлым кешем ниже.
                     if any(acc[p]['n'] > 0 for p in PERIODS):
-                        rows.append({
+                        fresh[(item['exchange'], item['symbol'])] = {
                             'exchange': item['exchange'], 'symbol': item['symbol'],
                             'base': item['base'], 'cls': item['cls'], 'periods': acc,
-                        })
+                            'updated_at': now_ms,
+                        }
                 except Exception as e:
                     print(f"leaderboard {item['exchange']}:{item['symbol']} err: {e}")
                 finally:
@@ -335,8 +334,25 @@ async def refresh_leaderboard() -> dict:
 
             await asyncio.gather(*(work(i) for i in universe))
 
+        # Склейка с прошлым кешем (Блок 39): HL из датацентра троттлит, за один
+        # проход добирается ~73/88 инструментов (случайный недобор). Вместо того
+        # чтобы показывать неполный рейтинг, берём свежие строки, а для тех, что
+        # в этот раз не собрались, — оставляем последнее известное значение из
+        # прошлого кеша (не старше STALE_KEEP_DAYS). За 1-2 «Обновить» HL
+        # добирается до 100%. Это остаётся «только рейтингом» — храним лишь
+        # посчитанные строки, не сырую историю фандинга.
+        merged = {}
+        prev = await get_leaderboard_cache('latest')
+        if prev:
+            for row in json.loads(prev['data']).get('rows', []):
+                if now_ms - row.get('updated_at', 0) <= STALE_KEEP_DAYS * 86400000:
+                    merged[(row['exchange'], row['symbol'])] = row
+        merged.update(fresh)   # свежие перекрывают старые
+        rows = list(merged.values())
+
         payload = {'rows': rows, 'periods': list(PERIODS.keys()),
-                   'computed_at': now_ms, 'universe_size': len(universe)}
+                   'computed_at': now_ms, 'universe_size': len(universe),
+                   'fresh_count': len(fresh)}
         await set_leaderboard_cache('latest', json.dumps(payload, ensure_ascii=False))
         status['last_updated'] = now_ms
         return payload
