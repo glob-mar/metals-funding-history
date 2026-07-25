@@ -35,7 +35,7 @@ WINDOW_DAYS = 190          # общее окно выгрузки (с запас
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
 # Конкурентность на биржу (см. семафоры ниже): HL держим умеренной против
 # троттлинга, OKX/Binance терпят больше.
-HL_CONCURRENCY = 10
+HL_CONCURRENCY = 4
 OKX_CONCURRENCY = 12
 BINANCE_CONCURRENCY = 12
 
