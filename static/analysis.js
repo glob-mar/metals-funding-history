@@ -15,7 +15,7 @@ let currentFundingSeries = []
 const pnlState = {
   deposit: 10000, leverage: 1, twoLegs: true, reinvestPct: 0,
   side: 'short', feeType: 'taker', feePct: 0.05,
-  startDate: null, rebalanceThresholdPct: 50, spreadPct: 0.05,
+  startDate: null, rebalanceThresholdPct: 50, spreadPct: 0.05, countSwap: true,
 }
 
 // null = считаем с самого начала собранной истории. Диапазон дат в поле
@@ -679,8 +679,14 @@ function computeHedgeLegCosts(startTs, endTs) {
   const notional = startingNotional()
   const live = liveSpreadPct(currentVantageSwap, price)
   const spreadPct = live !== null ? live : pnlState.spreadPct
+  // Галочка «Учитывать своп 2-й ноги» (Блок 37): swapCostRaw — всегда
+  // реальная величина (для показа в карточке), swapCost — то, что реально
+  // идёт в Чистый P&L/график/месячную таблицу (0, если галочка снята).
+  // Спред галочка не трогает — он отдельным чекбоксом не управляется.
+  const swapCostRaw = notional * (hedgeRatePct / 100) * nights
   return {
-    swapCost: notional * (hedgeRatePct / 100) * nights,
+    swapCost: pnlState.countSwap ? swapCostRaw : 0,
+    swapCostRaw, swapCounted: pnlState.countSwap,
     spreadCost: notional * (spreadPct / 100) * 2,
     spreadPct, spreadIsLive: live !== null,
     nights, symbol: currentVantageSwap.symbol,
@@ -784,7 +790,9 @@ function renderPnlSummary() {
   ]
   if (hedge) {
     cards.push(
-      { label: 'Своп (вторая нога)', value: fmtMoney(swapCost), sign: swapCost, detail: `${hedge.nights.toFixed(0)} ноч. · Vantage ${hedge.symbol}` },
+      hedge.swapCounted
+        ? { label: 'Своп (вторая нога)', value: fmtMoney(hedge.swapCostRaw), sign: hedge.swapCostRaw, detail: `${hedge.nights.toFixed(0)} ноч. · Vantage ${hedge.symbol}` }
+        : { label: 'Своп (вторая нога)', value: 'не учтён', sign: 0, detail: `был бы ${fmtMoney(hedge.swapCostRaw)} · галочка снята` },
       { label: 'Спред (вторая нога)', value: `−$${spreadCost.toFixed(2)}`, sign: 0, detail: hedge.spreadIsLive ? `вход+выход, живой спред Vantage ${hedge.spreadPct.toFixed(3)}%` : 'вход+выход, ручная оценка' },
     )
   }
@@ -1088,6 +1096,11 @@ document.getElementById('pnl-two-legs').addEventListener('change', (e) => {
   pnlState.twoLegs = e.target.checked
   document.getElementById('pnl-threshold-wrap').style.display = pnlState.twoLegs ? '' : 'none'
   document.getElementById('pnl-spread-wrap').style.display = pnlState.twoLegs ? '' : 'none'
+  document.getElementById('pnl-swap-wrap').style.display = pnlState.twoLegs ? '' : 'none'
+  renderPnlChart()
+})
+document.getElementById('pnl-count-swap').addEventListener('change', (e) => {
+  pnlState.countSwap = e.target.checked
   renderPnlChart()
 })
 document.getElementById('pnl-spread-pct').addEventListener('input', (e) => {
