@@ -72,9 +72,12 @@
       <th class="num">точек</th><th></th>
     </tr></thead>`
 
+    // ASSET_LABELS — глобальная const из inline-скрипта шаблона (const не
+    // вешается на window, поэтому берём через typeof, а не window.ASSET_LABELS).
+    const labels = (typeof ASSET_LABELS !== 'undefined') ? ASSET_LABELS : {}
     const body = shown.map((r, i) => {
       const p = r.periods[state.period]
-      const have = Object.prototype.hasOwnProperty.call(window.ASSET_LABELS || {}, r.base)
+      const have = Object.prototype.hasOwnProperty.call(labels, r.base)
       const addCell = have
         ? '<span class="lb-have">✓ в дашборде</span>'
         : `<button class="lb-add-btn" data-base="${r.base}">+ в дашборд</button>`
