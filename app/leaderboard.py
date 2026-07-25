@@ -33,7 +33,11 @@ HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
-CONCURRENCY = 20
+# Конкурентность на биржу (см. семафоры ниже): HL держим умеренной против
+# троттлинга, OKX/Binance терпят больше.
+HL_CONCURRENCY = 10
+OKX_CONCURRENCY = 12
+BINANCE_CONCURRENCY = 12
 
 # Металлы по нормализованному тикеру (у разных бирж свои имена одного металла).
 METAL_ALIASES = {
@@ -148,49 +152,37 @@ async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str], bi
 # иначе часовой фандинг HL (10 чанков на инструмент последовательно) был
 # бутылочным горлышком. Каждый запрос — с быстрым лёгким ретраем на 429/5xx.
 
-_SEM: asyncio.Semaphore | None = None
+# Отдельные семафоры на биржу: HL из датацентра Railway троттлит агрессивнее
+# (часовой фандинг = сотни запросов), поэтому его конкурентность держим ниже,
+# чтобы не ловить массовый 429; OKX/Binance терпят больше. Единый семафор на
+# всё раньше давал HL захлёбываться в общем залпе (63/88 инструментов с n=0).
+_SEM_HL: asyncio.Semaphore | None = None
+_SEM_OKX: asyncio.Semaphore | None = None
+_SEM_BINANCE: asyncio.Semaphore | None = None
 
 
-async def _get(client, url, params, retries=4):
+async def _get(client, sem, url, params, retries=5):
     for attempt in range(retries + 1):
         try:
-            async with _SEM:
-                r = await client.get(url, params=params, timeout=20.0)
+            async with sem:
+                r = await client.get(url, params=params, timeout=25.0)
             if r.status_code == 200:
                 return r
             if r.status_code == 429 or r.status_code >= 500:
-                await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
+                await asyncio.sleep(min(0.3 * (attempt + 1), 1.5))
                 continue
             return r
         except Exception:
             if attempt == retries:
                 return None
-            await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
-    return None
-
-
-async def _post(client, url, body, retries=4):
-    for attempt in range(retries + 1):
-        try:
-            async with _SEM:
-                r = await client.post(url, json=body, timeout=20.0)
-            if r.status_code == 200:
-                return r
-            if r.status_code == 429 or r.status_code >= 500:
-                await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
-                continue
-            return r
-        except Exception:
-            if attempt == retries:
-                return None
-            await asyncio.sleep(min(0.25 * (attempt + 1), 1.0))
+            await asyncio.sleep(min(0.3 * (attempt + 1), 1.5))
     return None
 
 
 async def _binance_funding(client, symbol, start_ms, end_ms) -> list[tuple[int, float]]:
     rows, start = [], start_ms
     while start < end_ms:
-        r = await _get(client, BINANCE_FUNDING_URL, {
+        r = await _get(client, _SEM_BINANCE, BINANCE_FUNDING_URL, {
             'symbol': symbol, 'startTime': start, 'endTime': end_ms, 'limit': 1000})
         if r is None or r.status_code != 200:
             break
@@ -211,7 +203,7 @@ async def _okx_funding(client, inst, start_ms, end_ms) -> list[tuple[int, float]
         params = {'instId': inst, 'limit': 100}
         if after:
             params['after'] = str(after)
-        r = await _get(client, OKX_FUNDING_URL, params)
+        r = await _get(client, _SEM_OKX, OKX_FUNDING_URL, params)
         if r is None or r.status_code != 200:
             break
         data = r.json().get('data', [])
@@ -230,20 +222,30 @@ async def _okx_funding(client, inst, start_ms, end_ms) -> list[tuple[int, float]
     return rows
 
 
-async def _hl_chunk(client, coin, dex, cs, ce) -> list[tuple[int, float]]:
-    r = await _post(client, HL_URL, {
-        'type': 'fundingHistory', 'coin': coin, 'dex': dex, 'startTime': cs, 'endTime': ce})
-    out = []
-    if r is not None and r.status_code == 200:
-        data = r.json()
-        if isinstance(data, list):
-            out = [(int(d['time']), float(d['fundingRate'])) for d in data]
-    return out
+async def _hl_chunk(client, coin, dex, cs, ce, retries=6) -> list[tuple[int, float]]:
+    # HL иногда отвечает 200 с телом-ошибкой (не списком) при троттлинге —
+    # это тоже ретраим, иначе получаем тихий пробел (весь инструмент n=0).
+    for attempt in range(retries + 1):
+        try:
+            async with _SEM_HL:
+                r = await client.post(HL_URL, json={
+                    'type': 'fundingHistory', 'coin': coin, 'dex': dex,
+                    'startTime': cs, 'endTime': ce}, timeout=25.0)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    return [(int(d['time']), float(d['fundingRate'])) for d in data]
+            # non-200 или не-список — ждём и повторяем
+        except Exception:
+            pass
+        if attempt < retries:
+            await asyncio.sleep(min(0.3 * (attempt + 1), 2.0))
+    return []
 
 
 async def _hl_funding(client, coin, dex, start_ms, end_ms) -> list[tuple[int, float]]:
-    # Чанки — независимые окна времени, тянем их ПАРАЛЛЕЛЬНО (общий лимит держит
-    # _SEM), а не по одному: это убирает главное бутылочное горлышко HL.
+    # Чанки — независимые окна времени, тянем их ПАРАЛЛЕЛЬНО (лимит держит
+    # _SEM_HL), а не по одному: это убирает главное бутылочное горлышко HL.
     windows = []
     cs = start_ms
     while cs < end_ms:
@@ -296,12 +298,15 @@ def _accumulate(points: list[tuple[int, float]], now_ms: int) -> dict:
 async def refresh_leaderboard() -> dict:
     status.update(running=True, started_at=_now_ms(), finished_at=None,
                   progress=0, total=0, error=None)
-    global _SEM
-    _SEM = asyncio.Semaphore(CONCURRENCY)
+    global _SEM_HL, _SEM_OKX, _SEM_BINANCE
+    _SEM_HL = asyncio.Semaphore(HL_CONCURRENCY)
+    _SEM_OKX = asyncio.Semaphore(OKX_CONCURRENCY)
+    _SEM_BINANCE = asyncio.Semaphore(BINANCE_CONCURRENCY)
+    total_conn = HL_CONCURRENCY + OKX_CONCURRENCY + BINANCE_CONCURRENCY + 4
     now_ms = _now_ms()
     start_ms = now_ms - WINDOW_DAYS * 86400000
     try:
-        limits = httpx.Limits(max_connections=CONCURRENCY + 4, max_keepalive_connections=CONCURRENCY + 4)
+        limits = httpx.Limits(max_connections=total_conn, max_keepalive_connections=total_conn)
         async with httpx.AsyncClient(headers={'User-Agent': 'metals-funding-history/1.0'}, limits=limits) as client:
             binance = await _binance_universe(client)
             binance_class = {i['base'].upper(): i['cls'] for i in binance}
