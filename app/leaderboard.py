@@ -33,7 +33,7 @@ HL_CHUNK_MS = 20 * 24 * 3600 * 1000
 
 WINDOW_DAYS = 190          # общее окно выгрузки (с запасом на 6 мес)
 PERIODS = {'1m': 30, '2m': 60, '3m': 90, '6m': 182}
-CONCURRENCY = 8
+CONCURRENCY = 6
 
 # Металлы по нормализованному тикеру (у разных бирж свои имена одного металла).
 METAL_ALIASES = {
@@ -43,7 +43,11 @@ METAL_ALIASES = {
     'PALLADIUM': 'XPD', 'XPD': 'XPD',
     'COPPER': 'XCU', 'XCU': 'XCU',
 }
-COMMODITY_KEYWORDS = ('OIL', 'BRENT', 'WTI', 'GAS', 'NATGAS', 'NGAS', 'CL', 'BZ', 'XNG', 'XBR', 'XTI')
+# ТОЧНЫЙ набор энергетических тикеров (не подстрока! иначе ORCL/CRCL ловились
+# на 'CL', AXTI — на 'XTI'). Основной источник класса — карта от Binance
+# (underlyingType), этот набор нужен лишь для HL/OKX-only тикеров, которых нет
+# на Binance (напр. HL 'BRENTOIL').
+COMMODITY_EXACT = {'CL', 'BZ', 'WTI', 'BRENT', 'BRENTOIL', 'NATGAS', 'NGAS', 'OIL', 'GAS', 'XNG', 'XBR', 'XTI'}
 
 status = {
     'running': False,
@@ -60,18 +64,26 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _classify(base: str, binance_type: str | None) -> str:
-    """Класс инструмента: 'metal' | 'commodity' | 'stock'. Binance даёт
-    authoritative underlyingType; для HL/OKX-only тикеров — эвристика."""
+def _classify_binance(base: str, underlying_type: str) -> str:
+    """Класс для Binance-инструмента напрямую из underlyingType (authoritative).
+    Металлы выделяем отдельно от прочих COMMODITY (энергии)."""
+    if base.upper() in METAL_ALIASES:
+        return 'metal'
+    if underlying_type == 'COMMODITY':
+        return 'commodity'
+    return 'stock'  # EQUITY
+
+
+def _classify_ref(base: str, binance_class: dict) -> str:
+    """Класс для HL/OKX-инструмента: сначала металлы (точный алиас), потом
+    authoritative-карта от Binance по базовому тикеру, потом точный набор
+    энергии, иначе акция. Никакого подстрочного матчинга."""
     norm = base.upper()
     if norm in METAL_ALIASES:
         return 'metal'
-    if binance_type == 'COMMODITY':
-        # COMMODITY у Binance — это металлы (уже отсеяны выше) или энергия
-        return 'commodity'
-    if binance_type == 'EQUITY':
-        return 'stock'
-    if any(k in norm for k in COMMODITY_KEYWORDS):
+    if norm in binance_class:
+        return binance_class[norm]
+    if norm in COMMODITY_EXACT:
         return 'commodity'
     return 'stock'
 
@@ -93,11 +105,11 @@ async def _binance_universe(client: httpx.AsyncClient) -> list[dict]:
             continue
         base = sym[:-4]
         out.append({'exchange': 'binance', 'symbol': sym, 'base': base,
-                    'cls': _classify(base, ut)})
+                    'cls': _classify_binance(base, ut)})
     return out
 
 
-async def _hl_universe(client: httpx.AsyncClient) -> list[dict]:
+async def _hl_universe(client: httpx.AsyncClient, binance_class: dict) -> list[dict]:
     r = await client.post(HL_URL, json={'type': 'meta', 'dex': 'xyz'}, timeout=20.0)
     data = r.json()
     uni = data.get('universe', []) if isinstance(data, dict) else []
@@ -108,11 +120,11 @@ async def _hl_universe(client: httpx.AsyncClient) -> list[dict]:
         name = u['name']                       # напр. 'xyz:NVDA'
         base = name.split(':', 1)[1] if ':' in name else name
         out.append({'exchange': 'hyperliquid', 'symbol': name, 'base': base,
-                    'cls': _classify(base, None), 'dex': 'xyz'})
+                    'cls': _classify_ref(base, binance_class), 'dex': 'xyz'})
     return out
 
 
-async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str]) -> list[dict]:
+async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str], binance_class: dict) -> list[dict]:
     r = await client.get(OKX_INSTRUMENTS_URL, params={'instType': 'SWAP'}, timeout=20.0)
     data = r.json().get('data', [])
     out = []
@@ -123,19 +135,57 @@ async def _okx_universe(client: httpx.AsyncClient, noncrypto_bases: set[str]) ->
         if base.upper() not in noncrypto_bases:
             continue
         out.append({'exchange': 'okx', 'symbol': d['instId'], 'base': base,
-                    'cls': _classify(base, None)})
+                    'cls': _classify_ref(base, binance_class)})
     return out
 
 
 # ── Сбор фандинга по сырому символу за окно ────────────────────────────────
+# Универсум большой (~330 инструментов), запросов много и они конкурентные —
+# биржи (особенно HL с часовым фандингом = сотни запросов) периодически
+# отвечают 429/5xx. Поэтому каждый запрос идёт через ретрай с экспоненциальным
+# backoff, иначе throttling давал бы тихие пробелы (инструмент с n=0 при том,
+# что данные реально есть).
+
+async def _get_retry(client, url, params, retries=4):
+    for attempt in range(retries + 1):
+        try:
+            r = await client.get(url, params=params, timeout=20.0)
+            if r.status_code == 200:
+                return r
+            if r.status_code == 429 or r.status_code >= 500:
+                await asyncio.sleep(0.4 * (2 ** attempt))
+                continue
+            return r
+        except Exception:
+            if attempt == retries:
+                return None
+            await asyncio.sleep(0.4 * (2 ** attempt))
+    return None
+
+
+async def _post_retry(client, url, body, retries=4):
+    for attempt in range(retries + 1):
+        try:
+            r = await client.post(url, json=body, timeout=20.0)
+            if r.status_code == 200:
+                return r
+            if r.status_code == 429 or r.status_code >= 500:
+                await asyncio.sleep(0.4 * (2 ** attempt))
+                continue
+            return r
+        except Exception:
+            if attempt == retries:
+                return None
+            await asyncio.sleep(0.4 * (2 ** attempt))
+    return None
+
 
 async def _binance_funding(client, symbol, start_ms, end_ms) -> list[tuple[int, float]]:
     rows, start = [], start_ms
     while start < end_ms:
-        r = await client.get(BINANCE_FUNDING_URL, params={
-            'symbol': symbol, 'startTime': start, 'endTime': end_ms, 'limit': 1000
-        }, timeout=20.0)
-        if r.status_code != 200:
+        r = await _get_retry(client, BINANCE_FUNDING_URL, {
+            'symbol': symbol, 'startTime': start, 'endTime': end_ms, 'limit': 1000})
+        if r is None or r.status_code != 200:
             break
         data = r.json()
         if not isinstance(data, list) or not data:
@@ -154,8 +204,8 @@ async def _okx_funding(client, inst, start_ms, end_ms) -> list[tuple[int, float]
         params = {'instId': inst, 'limit': 100}
         if after:
             params['after'] = str(after)
-        r = await client.get(OKX_FUNDING_URL, params=params, timeout=20.0)
-        if r.status_code != 200:
+        r = await _get_retry(client, OKX_FUNDING_URL, params)
+        if r is None or r.status_code != 200:
             break
         data = r.json().get('data', [])
         if not data:
@@ -178,22 +228,18 @@ async def _hl_funding(client, coin, dex, start_ms, end_ms) -> list[tuple[int, fl
     chunk_start = start_ms
     while chunk_start < end_ms:
         chunk_end = min(chunk_start + HL_CHUNK_MS, end_ms)
-        try:
-            r = await client.post(HL_URL, json={
-                'type': 'fundingHistory', 'coin': coin, 'dex': dex,
-                'startTime': chunk_start, 'endTime': chunk_end,
-            }, timeout=20.0)
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, list):
-                    for d in data:
-                        ts = int(d['time'])
-                        if ts in seen:
-                            continue
-                        seen.add(ts)
-                        rows.append((ts, float(d['fundingRate'])))
-        except Exception:
-            pass
+        r = await _post_retry(client, HL_URL, {
+            'type': 'fundingHistory', 'coin': coin, 'dex': dex,
+            'startTime': chunk_start, 'endTime': chunk_end})
+        if r is not None and r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list):
+                for d in data:
+                    ts = int(d['time'])
+                    if ts in seen:
+                        continue
+                    seen.add(ts)
+                    rows.append((ts, float(d['fundingRate'])))
         chunk_start = chunk_end + 1
     return rows
 
@@ -238,9 +284,10 @@ async def refresh_leaderboard() -> dict:
     try:
         async with httpx.AsyncClient(headers={'User-Agent': 'metals-funding-history/1.0'}) as client:
             binance = await _binance_universe(client)
-            hl = await _hl_universe(client)
+            binance_class = {i['base'].upper(): i['cls'] for i in binance}
+            hl = await _hl_universe(client, binance_class)
             noncrypto_bases = {i['base'].upper() for i in binance} | {i['base'].upper() for i in hl}
-            okx = await _okx_universe(client, noncrypto_bases)
+            okx = await _okx_universe(client, noncrypto_bases, binance_class)
             universe = binance + hl + okx
             status['total'] = len(universe)
 
