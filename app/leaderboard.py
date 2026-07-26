@@ -19,7 +19,7 @@ import json
 import traceback
 import httpx
 
-from .db import set_leaderboard_cache, get_leaderboard_cache, get_vantage_symbols
+from .db import set_leaderboard_cache, get_leaderboard_cache, get_vantage_symbols, get_all_assets
 
 OKX_FUNDING_URL = 'https://www.okx.com/api/v5/public/funding-rate-history'
 OKX_INSTRUMENTS_URL = 'https://www.okx.com/api/v5/public/instruments'
@@ -436,11 +436,22 @@ def _swap_night_pct(vs: dict, price: float | None) -> tuple[float | None, float 
     return None, None
 
 
-def _build_vantage_matcher(vsyms: list[dict]):
+def _build_vantage_matcher(vsyms: list[dict], asset_vantage: dict | None = None):
+    """asset_vantage — авторитетная ручная привязка из дашборда {ключ_актива:
+    тикер_Vantage} (assets.vantage). Имя на бирже и на Vantage часто не
+    совпадает (GOOGL на биржах = 'GOOG' на Vantage; часть тикеров у брокера —
+    полное название компании, напр. 'NVIDIA'/'AMAZON', см. Блок 33), поэтому
+    сначала пробуем эту привязку, а уже потом эвристику (точное имя / +USD /
+    алиасы металлов)."""
     vmap = {s['symbol'].upper(): s for s in vsyms}
+    av = {k.upper(): (v or '').upper() for k, v in (asset_vantage or {}).items() if v}
 
     def match(base: str) -> dict | None:
         norm = base.upper()
+        # 1) авторитетная ручная привязка из дашборда
+        if norm in av and av[norm] in vmap:
+            return vmap[av[norm]]
+        # 2) эвристика: металлы → точное имя → +USD
         cands = []
         if norm in METAL_ALIASES:
             m = METAL_ALIASES[norm]
@@ -502,9 +513,13 @@ async def refresh_leaderboard() -> dict:
                 print(f'leaderboard liquidity err: {e}')
 
             # Vantage-матчер (Блок 40) — из кэша vantage_symbols, для флага
-            # «есть на Vantage» и расчёта нетто (своп/спред второй ноги).
+            # «есть на Vantage» и расчёта нетто (своп/спред второй ноги). Плюс
+            # ручная привязка из дашборда (assets.vantage) как авторитетный
+            # источник, когда имя на бирже и на Vantage не совпадает (GOOGL→GOOG).
             try:
-                vantage_match = _build_vantage_matcher(await get_vantage_symbols())
+                assets = await get_all_assets()
+                asset_vantage = {a['key']: a.get('vantage') for a in assets if a.get('vantage')}
+                vantage_match = _build_vantage_matcher(await get_vantage_symbols(), asset_vantage)
             except Exception as e:
                 print(f'leaderboard vantage load err: {e}')
                 vantage_match = lambda base: None
