@@ -15,7 +15,7 @@
   // авто-направление по выбранной стороне (шорт → по убыванию, лонг → по возр.).
   const state = {
     from: null, to: null, cls: 'all', exchange: 'all', side: 'short',
-    minVol: 0, sort: { key: 'funding', dir: null }, data: null,
+    minVol: 0, minAge: 0, sort: { key: 'funding', dir: null }, data: null,
   }
   let pollTimer = null
   const $ = (id) => document.getElementById(id)
@@ -139,15 +139,28 @@
     const fromDay = dayEpoch(state.from), toDay = dayEpoch(state.to)
     if (toDay < fromDay) { $('lb-status').textContent = '⚠️ Дата «по» раньше даты «с» — поправь период.'; return }
 
+    // Возраст инструмента = дней с первой точки данных. Один и тот же для всех
+    // строк одного base — берём самую раннюю дату по всем биржам (где истории
+    // больше: Binance/HL ~190 дн., OKX ~90). Упирается в окно выгрузки ~190 дн.
+    const todayDay = Math.floor(Date.now() / DAY_MS)
+    const baseFirstDay = {}
+    for (const row of state.data.rows) {
+      if (row.d0 == null) continue
+      if (!(row.base in baseFirstDay) || row.d0 < baseFirstDay[row.base]) baseFirstDay[row.base] = row.d0
+    }
+    const tradeAge = (base) => (base in baseFirstDay) ? (todayDay - baseFirstDay[base]) : null
+
     // декорируем строки расчётом за окно + фильтры
     let decorated = []
     for (const row of state.data.rows) {
       if (state.cls !== 'all' && row.cls !== state.cls) continue
       if (state.exchange !== 'all' && row.exchange !== state.exchange) continue
+      const age = tradeAge(row.base)
+      if (state.minAge > 0 && !(age >= state.minAge)) continue
       const ws = windowStats(row, fromDay, toDay)
       if (!ws) continue
       if (state.minVol > 0 && !(row.vol >= state.minVol)) continue
-      decorated.push({ row, ws, net: null })
+      decorated.push({ row, ws, net: null, age })
     }
     for (const d of decorated) d.net = netStats(d.row, d.ws)
 
@@ -205,9 +218,10 @@
           netCell = `<span class="lb-vflag" title="🛡 Есть на Vantage (${sym}) — хеджируемо 2-й ногой">🛡</span>`
         }
       }
+      const ageTitle = d.age == null ? 'история недоступна' : `торгуется ~${d.age} дн. (по доступной истории, макс. ~190)`
       return `<tr>
         <td class="lb-rank">${i + 1}</td>
-        <td><b>${r.base}</b></td>
+        <td><b title="${ageTitle}">${r.base}</b></td>
         <td><span class="lb-cls-badge lb-cls-${r.cls}">${CLS_LABEL[r.cls] || r.cls}</span></td>
         <td><span class="badge ${EX_BADGE[r.exchange]}">${EX_LABEL[r.exchange]}</span></td>
         <td class="num ${signClass(ws.sum)}" title="${ws.covered} дн. данных${cover}">${fmtPct(ws.sum)}</td>
@@ -347,6 +361,10 @@
     wirePills('lb-exchange', 'exchange', 'exchange', false)
     wirePills('lb-side', 'side', 'side', false)
     wirePills('lb-minvol', 'minvol', 'minVol', true)
+    $('lb-min-age').addEventListener('input', () => {
+      state.minAge = Math.max(0, parseInt($('lb-min-age').value, 10) || 0)
+      render()
+    })
 
     $('lb-refresh-btn').addEventListener('click', refreshNow)
     loadLeaderboard()

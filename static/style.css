@@ -128,6 +128,11 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 .lb-table th.lb-sortable { cursor: pointer; user-select: none; }
 .lb-table th.lb-sortable:hover { color: var(--text-primary); }
 .lb-tip-mark { color: var(--text-tertiary); font-size: .85em; cursor: help; }
+/* Фильтр «Торгуется ≥ N дней» (Блок 40) */
+.lb-age-row { display: flex; align-items: center; gap: .35rem; }
+.lb-num { width: 68px; background: var(--bg-inset); border: 1px solid var(--border-default); border-radius: var(--r-ctl); color: var(--text-primary); padding: .32rem .4rem; font-size: .82rem; font-family: inherit; }
+.lb-num:focus { outline: none; border-color: var(--action-blue); }
+.lb-age-unit { font-size: .8rem; color: var(--text-tertiary); }
 .lb-net { font-weight: 600; }
 .lb-vflag { color: #58a6ff; cursor: help; }
 .lb-muted { color: var(--text-tertiary); }

@@ -74,6 +74,15 @@
             <button class="pill" data-minvol="100000000">&gt;$100M</button>
           </div>
         </div>
+        <div class="lb-ctl-group">
+          <span class="lb-ctl-label">Торгуется ≥
+            <span class="info-tip" data-tip="Скрыть свежие листинги: показывать только инструменты, у которых история фандинга не короче указанного числа дней. Впиши своё значение (0 — без фильтра). Максимум ограничен глубиной истории бирж (~190 дней).">ⓘ</span>
+          </span>
+          <div class="lb-age-row">
+            <input type="number" id="lb-min-age" class="lb-num" min="0" step="10" placeholder="0" value="0">
+            <span class="lb-age-unit">дней</span>
+          </div>
+        </div>
         <button class="btn blue" id="lb-refresh-btn">Обновить сейчас</button>
       </div>
       <div class="lb-status" id="lb-status"></div>
