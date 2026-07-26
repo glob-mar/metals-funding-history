@@ -127,6 +127,7 @@ h1 { font-size: 1.8rem; margin-bottom: .3rem; }
 /* Сортируемые заголовки + новые ячейки (Блок 40) */
 .lb-table th.lb-sortable { cursor: pointer; user-select: none; }
 .lb-table th.lb-sortable:hover { color: var(--text-primary); }
+.lb-tip-mark { color: var(--text-tertiary); font-size: .85em; cursor: help; }
 .lb-net { font-weight: 600; }
 .lb-vflag { color: #58a6ff; cursor: help; }
 .lb-muted { color: var(--text-tertiary); }

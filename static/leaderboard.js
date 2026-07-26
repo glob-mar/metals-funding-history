@@ -174,11 +174,16 @@
       if (state.sort.key !== k) return ''
       return state.sort.dir === 'asc' ? ' ▲' : ' ▼'
     }
+    // Подсказки заголовков — через нативный title на самом <th>, а не через
+    // .info-tip::after: таблица лежит в контейнере с overflow (горизонтальный
+    // скролл), который обрезал бы всплывающее над заголовком CSS-окно подсказки
+    // (уходило вверх за край и не было видно). Нативный title ничем не режется.
     const head = '<thead><tr>' + COLS.map(c => {
       const cls = [c.cls, c.num ? 'num' : '', c.sort ? 'lb-sortable' : ''].filter(Boolean).join(' ')
-      const tip = c.tip ? `<span class="info-tip" data-tip="${c.tip}">ⓘ</span>` : ''
+      const mark = c.tip ? ' <span class="lb-tip-mark">ⓘ</span>' : ''
+      const titleAttr = c.tip ? ` title="${c.tip.replace(/"/g, '&quot;')}"` : ''
       const sortAttr = c.sort ? ` data-sort="${c.key}"` : ''
-      return `<th class="${cls}"${sortAttr}>${c.label}${tip}${c.sort ? arrow(c.key) : ''}</th>`
+      return `<th class="${cls}"${sortAttr}${titleAttr}>${c.label}${mark}${c.sort ? arrow(c.key) : ''}</th>`
     }).join('') + '</tr></thead>'
 
     const labels = (typeof ASSET_LABELS !== 'undefined') ? ASSET_LABELS : {}
