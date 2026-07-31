@@ -10,6 +10,9 @@
 (function () {
   const TOP_N = 100
   const DAY_MS = 86400000
+  // Короче этого промежутка годовая экстраполяция (APR) не имеет смысла —
+  // помечаем её как ненадёжную, а не показываем как обычное число.
+  const MIN_SPAN_FOR_APR = 14
   const CLS_LABEL = { metal: 'металл', stock: 'акция', commodity: 'сырьё' }
   const EX_LABEL = { hyperliquid: 'Hyperliquid', binance: 'Binance', okx: 'OKX' }
   const EX_SHORT = { hyperliquid: 'HL', binance: 'Binance', okx: 'OKX' }
@@ -289,6 +292,12 @@
         `<span class="badge ${EX_BADGE[st.shortEx]}" title="здесь шорт">S ${EX_SHORT[st.shortEx]}</span>` +
         `<span class="sp-arrow">→</span>` +
         `<span class="badge ${EX_BADGE[st.longEx]}" title="здесь лонг">L ${EX_SHORT[st.longEx]}</span>`
+      // APR — годовая экстраполяция от охваченного промежутка. На коротком
+      // охвате (у HL часть истории добирается не с первого прохода) она
+      // раздувается: пара дней сильного карри превращаются в «+80% годовых».
+      // Не прячем цифру, но гасим её и явно предупреждаем в подсказке.
+      const thin = st.spanDays < MIN_SPAN_FOR_APR
+      const aprWarn = `Осторожно: посчитано всего по ${st.covered} дн. данных (промежуток ${st.spanDays} дн.) и растянуто на год — на таком коротком отрезке цифра почти ничего не значит.`
       const stab = st.stability === null ? '—' : `${Math.round(st.stability * 100)}%`
       const wk = st.weekendRatio === null ? '—' : `×${st.weekendRatio.toFixed(1)}`
       const payback = d.payback === null ? '—'
@@ -308,7 +317,7 @@
         <td><span class="lb-cls-badge lb-cls-${d.cls}">${CLS_LABEL[d.cls] || d.cls}</span></td>
         <td class="sp-dir">${dirCell}</td>
         <td class="num pos" title="${st.covered} дн. общих данных${cover}">${fmtPct(st.earned)}</td>
-        <td class="num pos">${fmtPct(st.apr)}</td>
+        <td class="num ${thin ? 'lb-muted' : 'pos'}"${thin ? ` title="${aprWarn}"` : ''}>${fmtPct(st.apr)}${thin ? ' ⚠' : ''}</td>
         <td class="num neg">−${d.cost.toFixed(2)}%</td>
         <td class="num ${signClass(d.net)}"><b>${fmtPct(d.net)}</b></td>
         <td class="num ${paybackCls}">${payback}</td>
