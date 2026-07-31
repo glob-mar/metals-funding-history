@@ -336,6 +336,43 @@ def _daily(points: list[tuple[int, float]]) -> tuple[int | None, list]:
     return d0, dv
 
 
+def _merge_daily(prev: dict | None, fresh: dict, now_ms: int) -> dict:
+    """Склейка суточных рядов ПО ДНЯМ, а не заменой строки целиком (Блок 41).
+
+    До этого свежая строка полностью замещала прошлую. Для Binance/OKX это
+    безобидно, а Hyperliquid из датацентра Railway троттлит (Блок 39): проход
+    часто добирает только часть чанков часового фандинга. В результате свежая
+    строка с 20 днями данных ЗАТИРАЛА прошлую с 60 днями — покрытие HL не
+    накапливалось от «Обновить» к «Обновить», а прыгало вверх-вниз, и годовая
+    экстраполяция (APR) на коротком охвате улетала в космос.
+
+    Суточная сумма фандинга за прошедший день задним числом не меняется,
+    поэтому старое значение дня — не «протухшие данные», а такой же факт;
+    берём свежее там, где оно есть, иначе прошлое. Дни старше окна выгрузки
+    отбрасываем, чтобы ряд не рос бесконечно."""
+    if not prev or prev.get('d0') is None or not prev.get('dv'):
+        return fresh
+    min_day = now_ms // DAY_MS - WINDOW_DAYS
+    days: dict[int, float] = {}
+    for row in (prev, fresh):                     # свежая идёт второй и перекрывает
+        d0, dv = row.get('d0'), row.get('dv') or []
+        if d0 is None:
+            continue
+        for i, v in enumerate(dv):
+            if v is None:
+                continue
+            day = d0 + i
+            if day >= min_day:
+                days[day] = v
+    if not days:
+        return fresh
+    lo, hi = min(days), max(days)
+    out = dict(fresh)
+    out['d0'] = lo
+    out['dv'] = [days.get(day) for day in range(lo, hi + 1)]
+    return out
+
+
 # ── Ликвидность: OI + оборот 24ч в $ (Блок 40) ─────────────────────────────
 # Прокси глубины стакана — «сколько денег в инструменте» и суточный оборот.
 # Голый фандинг бесполезен, если в инструмент не влезть объёмом. Тянем
@@ -576,7 +613,11 @@ async def refresh_leaderboard() -> dict:
                     continue
                 if now_ms - row.get('updated_at', 0) <= STALE_KEEP_DAYS * 86400000:
                     merged[(row['exchange'], row['symbol'])] = row
-        merged.update(fresh)   # свежие перекрывают старые
+        # Свежие перекрывают старые, но суточный ряд склеивается по дням
+        # (см. _merge_daily): недобор HL в этом проходе больше не стирает уже
+        # собранную историю, покрытие только накапливается.
+        for key, row in fresh.items():
+            merged[key] = _merge_daily(merged.get(key), row, now_ms)
         rows = list(merged.values())
 
         payload = {'rows': rows, 'day_ms': DAY_MS,
