@@ -543,6 +543,11 @@ async def refresh_leaderboard() -> dict:
                         'd0': d0, 'dv': dv,
                         'oi': round(lq['oi']) if lq.get('oi') is not None else None,
                         'vol': round(lq['vol']) if lq.get('vol') is not None else None,
+                        # Цена уже приходит из прохода по ликвидности (нужна была
+                        # для POINTS-свопа Vantage) — сохраняем её в строку, чтобы
+                        # экран «Спред между биржами» (Блок 41) мог показать
+                        # текущее расхождение цен по паре бирж без своего сбора.
+                        'price': lq.get('price'),
                         'updated_at': now_ms,
                     }
                     if vs:

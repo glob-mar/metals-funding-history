@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Спред между биржами — Funding Rate History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css?v={{ v }}">
+<link rel="stylesheet" href="/static/analysis.css?v={{ v }}">
+<link rel="stylesheet" href="/static/spread.css?v={{ v }}">
+</head>
+<body>
+<div class="container">
+  <div class="a-topbar">
+    <h1 class="a-title">🔀 Спред и фандинг между биржами</h1>
+    <a class="btn grey small" href="/">← К аналитике</a>
+  </div>
+
+  <p class="lb-explain">
+    Один и тот же актив торгуется на Hyperliquid, Binance и OKX — и фандинг там разный.
+    Отсюда <b>дельта-нейтральная связка</b>: шорт на бирже, где фандинг выше (там платят шортам),
+    лонг на бирже, где ниже. Цена актива из P&amp;L уходит — обе ноги гасят друг друга, — остаётся
+    только <b>разница фандинга</b> минус издержки на 4 исполнения (открыть две ноги и закрыть две).
+    Таблица считает это по всем парам бирж сразу и показывает <b>нетто</b>: останется ли что-то после издержек.
+    <br><br>
+    <b>Как читать «Вход по спреду»:</b> если биржа, которую по фандингу надо шортить, сейчас ещё и
+    <i>дороже</i> второй — схождение цен сработает в плюс (✓). Если она дешевле — вход против
+    схождения (✗), и расхождение может съесть карри.
+    <br>
+    <b>Честная оговорка:</b> направление связки выбрано <i>задним числом</i> — по тому, где фандинг уже
+    оказался выше за выбранный период. Колонка «Стабильн.» показывает, насколько ровно это держалось;
+    низкая стабильность = направление часто переворачивалось, и вперёд так же не повторится.
+  </p>
+
+  <div class="lb-controls">
+    <div class="lb-ctl-group lb-period-group">
+      <span class="lb-ctl-label">Период</span>
+      <div class="lb-daterange">
+        <input type="date" id="sp-from" class="lb-date">
+        <span class="lb-dash">—</span>
+        <input type="date" id="sp-to" class="lb-date">
+      </div>
+      <div class="pill-row" id="sp-period">
+        <button class="pill" data-days="7">7д</button>
+        <button class="pill" data-days="30">1м</button>
+        <button class="pill active" data-days="60">2м</button>
+        <button class="pill" data-days="90">3м</button>
+        <button class="pill" data-days="182">6м</button>
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Класс</span>
+      <div class="pill-row" id="sp-class">
+        <button class="pill active" data-class="all">Все</button>
+        <button class="pill" data-class="metal">Металлы</button>
+        <button class="pill" data-class="stock">Акции</button>
+        <button class="pill" data-class="commodity">Сырьё</button>
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Пара бирж</span>
+      <div class="pill-row" id="sp-pair">
+        <button class="pill active" data-pair="all">Все</button>
+        <button class="pill" data-pair="binance|okx">Bin↔OKX</button>
+        <button class="pill" data-pair="binance|hyperliquid">Bin↔HL</button>
+        <button class="pill" data-pair="hyperliquid|okx">HL↔OKX</button>
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Комиссия
+        <span class="info-tip" data-tip="Издержки связки = 4 исполнения (вход в две ноги + выход из двух). Тейкер/мейкер — ориентировочные обычные ставки бирж: Binance и OKX 0.05% / 0.02%, Hyperliquid 0.035% / 0.01%. Можно вписать свою ставку — она применится к обеим ногам.">ⓘ</span>
+      </span>
+      <div class="sp-fee-row">
+        <div class="pill-row" id="sp-fee">
+          <button class="pill active" data-fee="taker">Тейкер</button>
+          <button class="pill" data-fee="maker">Мейкер</button>
+        </div>
+        <input type="number" id="sp-fee-custom" class="lb-num" min="0" step="0.005" placeholder="своя, %">
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Ликвидность
+        <span class="info-tip" data-tip="Порог по СЛАБОЙ ноге: берётся меньший из суточных оборотов двух бирж пары. Тонкая нога — это проскальзывание, которое съест разницу фандинга независимо от расчёта.">ⓘ</span>
+      </span>
+      <div class="pill-row" id="sp-minvol">
+        <button class="pill active" data-minvol="0">любая</button>
+        <button class="pill" data-minvol="1000000">&gt;$1M</button>
+        <button class="pill" data-minvol="10000000">&gt;$10M</button>
+        <button class="pill" data-minvol="100000000">&gt;$100M</button>
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Торгуется ≥
+        <span class="info-tip" data-tip="Скрыть свежие листинги: показывать только инструменты с историей не короче указанного числа дней (0 — без фильтра). Ограничено глубиной выгрузки ~190 дней.">ⓘ</span>
+      </span>
+      <div class="lb-age-row">
+        <input type="number" id="sp-min-age" class="lb-num" min="0" step="10" placeholder="0" value="0">
+        <span class="lb-age-unit">дней</span>
+      </div>
+    </div>
+    <div class="lb-ctl-group">
+      <span class="lb-ctl-label">Только прибыльные
+        <span class="info-tip" data-tip="Показывать только пары, где разница фандинга за период перекрыла издержки на 4 исполнения (нетто больше нуля).">ⓘ</span>
+      </span>
+      <div class="pill-row" id="sp-profitable">
+        <button class="pill active" data-profitable="0">Все</button>
+        <button class="pill" data-profitable="1">Нетто &gt; 0</button>
+      </div>
+    </div>
+    <button class="btn blue" id="sp-refresh-btn">Обновить данные</button>
+  </div>
+
+  <div class="sp-summary" id="sp-summary"></div>
+  <div class="lb-status" id="sp-status"></div>
+  <div class="table-scroll">
+    <table class="lb-table" id="sp-table"></table>
+  </div>
+</div>
+
+<script>
+  const ASSET_LABELS = {{ asset_labels_json | safe }}
+</script>
+<script src="/static/spread.js?v={{ v }}"></script>
+</body>
+</html>

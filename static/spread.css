@@ -1,0 +1,41 @@
+/* Экран «Спред и фандинг между биржами» (Блок 41). Базовые классы (.lb-*,
+   .pill, .badge, .table-scroll, .num, .pos/.neg) переиспользуются из
+   style.css/analysis.css — здесь только то, чего там нет. */
+
+.sp-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .8rem;
+  margin: .2rem 0 1rem;
+}
+.sp-stat {
+  flex: 1 1 160px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-card, 8px);
+  padding: .7rem .9rem;
+}
+.sp-stat-label {
+  font-size: .72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text-tertiary);
+  margin-bottom: .3rem;
+}
+.sp-stat-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+.sp-stat-sub { font-size: .9rem; font-weight: 500; color: var(--text-secondary); }
+
+/* Связка: два бейджа бирж со стрелкой между ними (шорт → лонг). */
+.sp-dir { white-space: nowrap; }
+.sp-dir .badge { vertical-align: middle; }
+.sp-arrow { color: var(--text-tertiary); margin: 0 .3rem; font-size: .8rem; }
+
+/* Комиссия: пресеты и поле своей ставки в одну строку. */
+.sp-fee-row { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.sp-fee-row .lb-num { width: 6.5rem; }

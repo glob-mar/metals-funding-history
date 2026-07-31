@@ -80,6 +80,20 @@ async def index(request: Request):
     )
 
 
+@app.get('/spread', response_class=HTMLResponse)
+async def spread_page(request: Request):
+    """Экран «Спред и фандинг между биржами» (Блок 41) — сравнение одного и того
+    же актива на разных биржах: разница накопленного фандинга по паре бирж и
+    расхождение цен. Своего API не требует: считается на клиенте из того же
+    /api/leaderboard, что и лидерборд (там уже лежат суточные ряды фандинга,
+    ликвидность и цена по каждой паре биржа+инструмент)."""
+    asset_labels_json = json.dumps({k: v['label'] for k, v in ASSETS.items()}, ensure_ascii=False)
+    return templates.TemplateResponse(
+        'spread.html',
+        {'request': request, 'asset_labels_json': asset_labels_json, 'v': ASSET_VERSION},
+    )
+
+
 @app.get('/analysis')
 async def analysis_page_redirect():
     """Аналитика переехала на главную (Блок 15) — старые ссылки/закладки на
