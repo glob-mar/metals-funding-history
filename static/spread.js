@@ -25,6 +25,21 @@
     hyperliquid: { taker: 0.035, maker: 0.01 },
   }
 
+  // Один и тот же инструмент на разных биржах называется по-разному: металлы на
+  // Binance/OKX — XAU/XAG/XPT/XPD, на Hyperliquid — GOLD/SILVER/PLATINUM/
+  // PALLADIUM; нефть Brent — BZ против BRENTOIL. Без приведения к общему ключу
+  // металлы (главный интерес) вообще не попадали в сравнение с Hyperliquid —
+  // группировка по сырому base считала их разными активами. Карта повторяет
+  // METAL_ALIASES из app/leaderboard.py — держим синхронно.
+  // Намеренно НЕ сводим SP500↔SPY и JP225↔EWJ и т.п.: это разные инструменты
+  // (индекс против ETF) с разным масштабом цены — колонка спреда цен была бы
+  // бессмыслицей.
+  const BASE_ALIASES = {
+    GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XPD', COPPER: 'XCU',
+    BRENTOIL: 'BZ',
+  }
+  const canonBase = (b) => BASE_ALIASES[b] || b
+
   const state = {
     from: null, to: null, cls: 'all', pair: 'all', minVol: 0, minAge: 0,
     feeMode: 'taker', feeCustom: null, profitableOnly: false,
@@ -189,14 +204,15 @@
     const fromDay = dayEpoch(state.from), toDay = dayEpoch(state.to)
     if (toDay < fromDay) { $('sp-status').textContent = '⚠️ Дата «по» раньше даты «с» — поправь период.'; return }
 
-    // группируем строки по активу: base -> { биржа: строка }
+    // группируем строки по активу: канонический base -> { биржа: строка }
     const byBase = {}
     const baseFirstDay = {}
     for (const row of state.data.rows) {
-      if (!byBase[row.base]) byBase[row.base] = {}
-      byBase[row.base][row.exchange] = row
+      const cb = canonBase(row.base)
+      if (!byBase[cb]) byBase[cb] = {}
+      byBase[cb][row.exchange] = row
       if (row.d0 == null) continue
-      if (!(row.base in baseFirstDay) || row.d0 < baseFirstDay[row.base]) baseFirstDay[row.base] = row.d0
+      if (!(cb in baseFirstDay) || row.d0 < baseFirstDay[cb]) baseFirstDay[cb] = row.d0
     }
     const todayDay = Math.floor(Date.now() / DAY_MS)
 
@@ -265,6 +281,10 @@
       const st = d.st
       const inDash = Object.prototype.hasOwnProperty.call(labels, d.base)
       const ageTitle = d.age == null ? 'история недоступна' : `торгуется ~${d.age} дн. (по доступной истории, макс. ~190)`
+      // Если тикер на биржах называется по-разному (XAU против GOLD) — показываем
+      // это явно, чтобы не гадать, что с чем сравнивается.
+      const alias = d.rowShort.base === d.rowLong.base ? '' :
+        ` <span class="sp-alias" title="${EX_LABEL[st.shortEx]}: ${d.rowShort.base} · ${EX_LABEL[st.longEx]}: ${d.rowLong.base}">≡ ${d.rowShort.base === d.base ? d.rowLong.base : d.rowShort.base}</span>`
       const dirCell =
         `<span class="badge ${EX_BADGE[st.shortEx]}" title="здесь шорт">S ${EX_SHORT[st.shortEx]}</span>` +
         `<span class="sp-arrow">→</span>` +
@@ -284,7 +304,7 @@
       const cover = st.coverage === null ? '' : ` · покрытие ${Math.round(st.coverage * 100)}%`
       return `<tr>
         <td class="lb-rank">${i + 1}</td>
-        <td><b title="${ageTitle}">${d.base}</b>${inDash ? ' <span class="lb-have" title="есть в дашборде">✓</span>' : ''}</td>
+        <td><b title="${ageTitle}">${d.base}</b>${alias}${inDash ? ' <span class="lb-have" title="есть в дашборде">✓</span>' : ''}</td>
         <td><span class="lb-cls-badge lb-cls-${d.cls}">${CLS_LABEL[d.cls] || d.cls}</span></td>
         <td class="sp-dir">${dirCell}</td>
         <td class="num pos" title="${st.covered} дн. общих данных${cover}">${fmtPct(st.earned)}</td>

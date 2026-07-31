@@ -36,6 +36,9 @@
 .sp-dir .badge { vertical-align: middle; }
 .sp-arrow { color: var(--text-tertiary); margin: 0 .3rem; font-size: .8rem; }
 
+/* Второе имя того же инструмента на другой бирже (XAU ≡ GOLD). */
+.sp-alias { font-size: .75rem; color: var(--text-tertiary); white-space: nowrap; }
+
 /* Комиссия: пресеты и поле своей ставки в одну строку. */
 .sp-fee-row { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .sp-fee-row .lb-num { width: 6.5rem; }
